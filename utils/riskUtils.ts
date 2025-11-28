@@ -4,7 +4,8 @@ import { ExperienceLevel, UserProfile, TripData, RiskAnalysis, RiskLevel, RiskFa
 export const calculateRiskAnalysis = (
   user: UserProfile, 
   data: TripData, 
-  startTime: string
+  startTime: string,
+  packWeight?: number // Optional weight factor
 ): RiskAnalysis => {
   let score = 0;
   const factors: RiskFactor[] = [];
@@ -72,7 +73,13 @@ export const calculateRiskAnalysis = (
     add('Temperature', 1, 'Cold and wet/windy. Hypothermia risk.');
   }
 
-  // 5. Missing Data Penalty
+  // 5. Pack Weight (New)
+  if (packWeight !== undefined) {
+      if (packWeight > 15) add('Gear', 2, 'Very heavy pack increases fatigue and injury risk.');
+      else if (packWeight > 10) add('Gear', 1, 'Heavy pack for a day hike.');
+  }
+
+  // 6. Missing Data Penalty
   if (data.distanceKm === 0 || data.elevationM === 0) {
     add('Uncertainty', 1, 'Missing key trail data increases risk.');
   }
@@ -141,13 +148,6 @@ export const calculateTurnaroundTime = (data: TripData, startTime: string, fitne
 
   const durationHours = (data.distanceKm / speed) * 1.1; // +10% buffer
   
-  // Halfway point turnaround logic? Or just total time?
-  // Let's suggest turning around at half the safe daylight duration available?
-  // Simpler: Just calculate expected finish. If it's near sunset, turnaround = sunset - (duration/2).
-  // Default: Turnaround is Start + (Duration / 2) + buffer? 
-  // Actually usually "Turnaround Time" means "If you haven't reached the top by X, go back".
-  // Let's output the estimated time they should be halfway.
-  
   const startHour = parseInt(startTime.split(':')[0], 10);
   const startMin = parseInt(startTime.split(':')[1], 10);
   const startTotalMinutes = startHour * 60 + startMin;
@@ -180,14 +180,6 @@ export const estimatePackWeight = (data: TripData): number => {
 
 export const calculateULScore = (weight: number, data: TripData): number => {
   // Arbitrary gamified score
-  // If weight < 4kg => 100? No, that's empty.
-  // Let's say: 
-  // < 4kg = 95-100 (SUL)
-  // 4-6kg = 80-94 (UL)
-  // 6-8kg = 60-79 (Light)
-  // 8-10kg = 40-59 (Trad)
-  // > 10kg = < 40
-  
   if (weight < 4) return 98;
   if (weight < 6) return 85;
   if (weight < 8) return 65;

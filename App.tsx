@@ -400,6 +400,7 @@ const App: React.FC = () => {
 
               <ReportView 
                 report={report} 
+                hikeDetails={hikeDetails}
                 isLoading={isGenerating} 
                 loadingText={loadingText}
                 onDeepCheck={handleSafetyCheck}

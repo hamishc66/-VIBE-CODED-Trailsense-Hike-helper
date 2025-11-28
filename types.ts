@@ -1,4 +1,3 @@
-
 export enum ExperienceLevel {
   BEGINNER = 'Beginner',
   INTERMEDIATE = 'Intermediate',
@@ -28,6 +27,8 @@ export interface TripReportSummary {
   difficulty: string;
   stats: string;
   riskFactor: string;
+  highlights: string[];
+  tips: string[]; // Personalized tips based on profile
   verdict: string;
 }
 
@@ -60,6 +61,8 @@ export interface TripReport {
   data: TripData;
   warnings?: WarningChip[];
   ulGear?: string; // Single string suggestion
+  gearList?: string[]; // Structured list for dropdown
+  gearReason?: string; // Explanation for dropdown
 }
 
 export interface AIResponse {

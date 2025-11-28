@@ -1,4 +1,3 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { UserProfile, HikeDetails, GroundingSource, TripReport, TripReportSummary, SafetyAnalysis, TripData, SaferAlternative, RiskAnalysis } from "../types";
 
@@ -56,6 +55,8 @@ const parseTripReport = (text: string, sources: GroundingSource[]): TripReport =
     difficulty: "Moderate",
     stats: "Distance unknown",
     riskFactor: "Check local conditions",
+    highlights: [],
+    tips: [],
     verdict: "Proceed with caution"
   };
 
@@ -75,6 +76,8 @@ const parseTripReport = (text: string, sources: GroundingSource[]): TripReport =
   };
   
   let ulGear = "Sawyer Squeeze filter & Smartwater bottle";
+  let gearList: string[] = [];
+  let gearReason = "Conditions require standard preparation.";
 
   // Parse Summary
   if (summaryMatch) {
@@ -83,6 +86,8 @@ const parseTripReport = (text: string, sources: GroundingSource[]): TripReport =
       if (line.startsWith('Difficulty:')) summary.difficulty = line.replace('Difficulty:', '').trim();
       if (line.startsWith('Stats:')) summary.stats = line.replace('Stats:', '').trim();
       if (line.startsWith('Risk:')) summary.riskFactor = line.replace('Risk:', '').trim();
+      if (line.startsWith('Highlights:')) summary.highlights = line.replace('Highlights:', '').split(',').map(s => s.trim()).filter(s => s);
+      if (line.startsWith('Tips:')) summary.tips = line.replace('Tips:', '').split('|').map(s => s.trim()).filter(s => s);
       if (line.startsWith('Verdict:')) summary.verdict = line.replace('Verdict:', '').trim();
     });
   }
@@ -118,14 +123,27 @@ const parseTripReport = (text: string, sources: GroundingSource[]): TripReport =
             data.elevationProfile = val.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n));
         }
         if (key === 'UL_Gear_Suggestion') ulGear = val;
+        if (key === 'Gear_List') gearList = val.split(',').map(s => s.trim()).filter(s => s);
+        if (key === 'Gear_Reason') gearReason = val;
       }
     });
   }
 
   // Content is the rest or the specific block
-  const markdownContent = contentMatch ? contentMatch[1].trim() : text.replace(summaryRegex, '').replace(safetyRegex, '').replace(dataRegex, '').trim();
+  let markdownContent = contentMatch 
+    ? contentMatch[1].trim() 
+    : text.replace(summaryRegex, '')
+          .replace(safetyRegex, '')
+          .replace(dataRegex, '')
+          .trim();
+  
+  // Extra safety cleanup to remove any leaking tags
+  markdownContent = markdownContent
+    .replace(/---CONTENT---/g, '')
+    .replace(/---END_CONTENT---/g, '')
+    .trim();
 
-  return { summary, safety, markdownContent, sources, data, ulGear };
+  return { summary, safety, markdownContent, sources, data, ulGear, gearList, gearReason };
 };
 
 /**
@@ -160,13 +178,11 @@ export const generateTripReport = async (
       
       TASK:
       Re-analyze the hike and provide a FULL updated report.
-      If the user just asked a question, answer it within the relevant sections or add a Q&A section, but maintain the full report structure.
-      Ensure the packing list is updated if the user's question affects gear.
       Use Google Search/Maps to get new info if needed.
      `;
   } else {
     prompt = `
-      Analyze this hike plan based on real-time data found via Google Search and Maps.
+      Analyze this hike plan using Google Search and Google Maps to find accurate, real-time data.
       
       User Profile:
       - Experience: ${user.experience}
@@ -181,20 +197,18 @@ export const generateTripReport = async (
       ${hike.distanceKm ? `- Estimated Distance: ${hike.distanceKm} km` : ''}
       ${hike.notes ? `- User Notes/Gear: ${hike.notes}` : ''}
       
-      If the trail name is ambiguous or missing, use the location/coordinates to find the nearest popular trail.
-
-      Task:
-      1. Find current weather conditions and SUNSET time for that date/location.
-      2. Find trail details (elevation, difficulty, length).
-      3. INTERNALLY Assess Safety Level (Low, Moderate, Elevated, High) based on weather, distance, and user experience.
-      4. Provide a TrailSense Report with:
-         - Conditions Overview
-         - Route Summary
-         - Recommended Gear List (Tailored to risk)
-         - Safety Notes
-         - Extra Tips
+      Tasks:
+      1. USE GOOGLE MAPS/SEARCH to find the *accurate* elevation profile and distance. Do not guess.
+      2. USE GOOGLE SEARCH to find the *current* weather forecast and SUNSET time for that specific date/location.
+      3. INTERNALLY Assess Safety Level based on real-time data.
+      4. Find 2-3 specific "highlights" or cool features of this trail.
+      5. Provide 2-3 personalized tips based on the user's fitness (${user.fitness}) and experience (${user.experience}).
+      6. Provide a TrailSense Report.
       
-      ${isBeginner ? 'Note: Since the user is a beginner, define terms like "switchbacks" or "scree" if used. Be very supportive but clear about turning around.' : ''}
+      IMPORTANT:
+      For the "Elevation_Profile" data field, you MUST use Google Maps data to find the actual relative elevation change points of this specific trail. Generate a comma-separated list of 10 integers (0-100 scale) that accurately reflect the trail's shape (e.g. starts low, peaks middle, ends low).
+      
+      ${isBeginner ? 'Note: Since the user is a beginner, define terms like "switchbacks" or "scree" if used.' : ''}
     `;
   }
 
@@ -209,14 +223,18 @@ export const generateTripReport = async (
     Weather_Condition: [Short string e.g. Sunny, Stormy, Rain]
     Temp_C: [Number e.g. 24]
     Sunset_Time: [Time 24h e.g. 18:45]
-    Elevation_Profile: [Comma separated list of 10 relative elevation integers representing the shape of the hike e.g. 0,10,30,80,100,80,20,0]
+    Elevation_Profile: [Comma separated list of 10 relative elevation integers (0-100) representing the profile shape e.g. 0,10,40,90,100,90,40,20,10,0]
     UL_Gear_Suggestion: [Short specific real UL gear suggestion e.g. "Toaks 750ml pot"]
+    Gear_List: [Comma separated list of 5-7 essential packing items tailored for this specific hike/weather]
+    Gear_Reason: [One sentence explaining why this specific gear is needed today]
     ---END_DATA---
 
     ---SUMMARY---
     Difficulty: [Easy / Moderate / Hard]
     Stats: [Distance in km], [Elevation in m] gain
     Risk: [Main risk factor e.g. Heat, Storms, or None]
+    Highlights: [Comma separated list of 2-3 short cool highlights e.g. Waterfall, Peak View, Wildflowers]
+    Tips: [Pipe separated list of 3 short personalized tips e.g. Bring extra water | Pacing is key | Watch for ice]
     Verdict: [Short verdict e.g. "Good to go with care"]
     ---END_SUMMARY---
 
@@ -267,7 +285,7 @@ export const generateTripReport = async (
   } catch (error) {
     console.error("Report Generation Error:", error);
     return { 
-      summary: { difficulty: "Unknown", stats: "--", riskFactor: "Connection Error", verdict: "Try again" },
+      summary: { difficulty: "Unknown", stats: "--", riskFactor: "Connection Error", highlights: [], tips: [], verdict: "Try again" },
       safety: { pros: [], cons: ["Could not connect to AI service."], dealBreakers: [] },
       markdownContent: "I'm having trouble connecting to the trail network right now. Please check your internet connection.", 
       sources: [],

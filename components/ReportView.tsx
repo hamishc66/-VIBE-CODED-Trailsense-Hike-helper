@@ -1,12 +1,12 @@
-
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { TripReport, RiskAnalysis, SaferAlternative, HistoryItem, TripData } from '../types';
-import { IconLink, IconSearch, IconShield, IconCheck, IconWarning, IconStop, IconSend, IconInfo, IconRefresh, IconHistory, IconTime, IconSettings, IconScale, IconChart } from './Icons';
+import { TripReport, RiskAnalysis, SaferAlternative, HistoryItem, TripData, WarningChip, HikeDetails } from '../types';
+import { IconLink, IconSearch, IconShield, IconCheck, IconWarning, IconStop, IconSend, IconInfo, IconRefresh, IconHistory, IconTime, IconSettings, IconScale, IconChart, IconCloud, IconWeight, IconStar, IconShare, IconList, IconMap, IconFirstAid, IconBot } from './Icons';
 import { calculateTurnaroundTime, estimatePackWeight, calculateULScore, calculateRiskAnalysis, generateWarnings } from '../utils/riskUtils';
 
 interface ReportViewProps {
   report: TripReport | null;
+  hikeDetails: HikeDetails;
   isLoading: boolean;
   loadingText?: string;
   onDeepCheck: () => void;
@@ -20,11 +20,17 @@ interface ReportViewProps {
   historyItem: HistoryItem | null;
   onReRunHistory: () => void;
   isBeginner: boolean;
-  userProfile: any; // Passed for "What If" calculations
+  userProfile: any;
+}
+
+interface ChatMessage {
+    role: 'user' | 'model';
+    text: string;
 }
 
 const ReportView: React.FC<ReportViewProps> = ({ 
   report, 
+  hikeDetails,
   isLoading, 
   loadingText, 
   onDeepCheck, 
@@ -40,23 +46,72 @@ const ReportView: React.FC<ReportViewProps> = ({
   isBeginner,
   userProfile
 }) => {
-  const [question, setQuestion] = useState('');
   const [showRiskDetails, setShowRiskDetails] = useState(false);
   const [showWhatIf, setShowWhatIf] = useState(false);
+  
+  // Gear Dropdown states
+  const [showFullGearList, setShowFullGearList] = useState(false);
+  const [showGearReason, setShowGearReason] = useState(false);
   
   // Local state for "What If" mode
   const [whatIfData, setWhatIfData] = useState<TripData | null>(null);
   const [whatIfRisk, setWhatIfRisk] = useState<RiskAnalysis | null>(null);
+  const [whatIfWarnings, setWhatIfWarnings] = useState<WarningChip[]>([]);
+  const [whatIfULScore, setWhatIfULScore] = useState(0);
+  
+  // Adjustments
   const [tempAdjust, setTempAdjust] = useState(0);
   const [distAdjust, setDistAdjust] = useState(0);
+  const [timeAdjust, setTimeAdjust] = useState(0); // in hours
+  const [weatherOverride, setWeatherOverride] = useState('');
+  const [weightAdjust, setWeightAdjust] = useState(0); // in kg
+  const [fitnessOverride, setFitnessOverride] = useState<string>('');
+
+  // Share Modal State
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareFormat, setShareFormat] = useState<'minimal' | 'full' | 'detailed'>('full');
+  const [shareText, setShareText] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  // Chat State
+  const [chatInput, setChatInput] = useState('');
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([
+      { role: 'model', text: "I've analyzed the trail conditions for you. Let me know if you need to adjust the plan!" }
+  ]);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const prevLoadingRef = useRef(isLoading);
 
   useEffect(() => {
     if (report?.data) {
       setWhatIfData(report.data);
+      // Reset adjustments on new report load (initial)
+      // We don't reset on updates to preserve context if user was playing with them, 
+      // but for simplicity we reset here to match the new "ground truth".
       setTempAdjust(0);
       setDistAdjust(0);
+      setTimeAdjust(0);
+      setWeatherOverride('');
+      setWeightAdjust(0);
+      setFitnessOverride('');
+      setShowFullGearList(false);
+      setShowGearReason(false);
     }
   }, [report]);
+
+  // Handle Chat History Updates
+  useEffect(() => {
+      // If we finished loading...
+      if (prevLoadingRef.current && !isLoading && report) {
+          setChatHistory(prev => [...prev, { role: 'model', text: "Plan updated! I've adjusted the details based on your request." }]);
+      }
+      prevLoadingRef.current = isLoading;
+  }, [isLoading, report]);
+
+  // Scroll to bottom of chat
+  useEffect(() => {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatHistory, isLoading]);
+
 
   // Recalculate what-if risk when sliders move
   useEffect(() => {
@@ -66,28 +121,51 @@ const ReportView: React.FC<ReportViewProps> = ({
     const hypoData: TripData = {
       ...whatIfData,
       tempC: report.data.tempC + tempAdjust,
-      distanceKm: Math.max(1, report.data.distanceKm + distAdjust)
+      distanceKm: Math.max(1, report.data.distanceKm + distAdjust),
+      weatherCondition: weatherOverride || report.data.weatherCondition
     };
 
-    // Recalc risk
-    const newRisk = calculateRiskAnalysis(userProfile, hypoData, "12:00"); // Simplify start time for sliders or add slider
+    // Parse hypothetical start time
+    const baseHour = 9; 
+    const newHour = Math.min(23, Math.max(0, baseHour + timeAdjust));
+    const hypoStartTime = `${newHour.toString().padStart(2, '0')}:00`;
+
+    // Hypo Weight
+    const estimatedBase = estimatePackWeight(hypoData);
+    const hypoWeight = Math.max(1, estimatedBase + weightAdjust);
+
+    // Hypo User
+    const hypoUser = {
+        ...userProfile,
+        fitness: (fitnessOverride || userProfile.fitness) as 'low' | 'medium' | 'high'
+    };
+
+    // Recalc risk, warnings, scores
+    const newRisk = calculateRiskAnalysis(hypoUser, hypoData, hypoStartTime, hypoWeight);
+    const newWarnings = generateWarnings(hypoData, hypoStartTime);
+    const newScore = calculateULScore(hypoWeight, hypoData);
+
     setWhatIfRisk(newRisk);
-  }, [tempAdjust, distAdjust, report, userProfile, whatIfData]);
+    setWhatIfWarnings(newWarnings);
+    setWhatIfULScore(newScore);
+
+  }, [tempAdjust, distAdjust, timeAdjust, weatherOverride, weightAdjust, fitnessOverride, report, userProfile, whatIfData]);
 
 
-  const handleSubmitFollowUp = (e: React.FormEvent) => {
+  const handleSubmitChat = (e: React.FormEvent) => {
     e.preventDefault();
-    if (question.trim()) {
-      onFollowUp(question);
-      setQuestion('');
+    if (chatInput.trim()) {
+      setChatHistory(prev => [...prev, { role: 'user', text: chatInput }]);
+      onFollowUp(chatInput);
+      setChatInput('');
     }
   };
 
   const Tooltip = ({ text }: { text: string }) => (
     isBeginner ? (
-      <div className="group relative inline-block ml-1 align-middle z-50">
+      <div className="group relative inline-block ml-1 align-middle z-10">
         <IconInfo className="w-4 h-4 text-forest-400 hover:text-forest-600 cursor-help" />
-        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 p-2 bg-stone-800 text-white text-xs rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-[100]">
+        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 p-2 bg-stone-800 text-white text-xs rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-50 pointer-events-none">
           {text}
           <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-stone-800"></div>
         </div>
@@ -95,8 +173,8 @@ const ReportView: React.FC<ReportViewProps> = ({
     ) : null
   );
 
-  // Loading Overlay
-  if (isLoading) {
+  // Initial Full Page Loading (Only if no report exists yet)
+  if (isLoading && !report) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px] animate-fade-in space-y-4">
         <div className="relative w-16 h-16">
@@ -111,46 +189,230 @@ const ReportView: React.FC<ReportViewProps> = ({
   if (!report) return null;
 
   // Derived Values
-  const effectiveData = report.data; // Or whatIfData if applied, but simpler to just show whatIf panel separately
+  const effectiveData = report.data; 
   const packWeight = estimatePackWeight(effectiveData);
   const ulScore = calculateULScore(packWeight, effectiveData);
-  const turnaround = calculateTurnaroundTime(effectiveData, "09:00", userProfile.fitness); // Use actual start time in real app
-  const warnings = generateWarnings(effectiveData, "09:00"); // Use actual start time
+  const turnaround = calculateTurnaroundTime(effectiveData, hikeDetails.startTime, userProfile.fitness); 
+  const warnings = generateWarnings(effectiveData, hikeDetails.startTime); 
 
-  // Animated Graph Helper
-  const renderElevationGraph = () => {
-    const points = effectiveData.elevationProfile || [0, 20, 50, 80, 40, 0];
-    const max = Math.max(...points, 100);
-    const width = 300;
-    const height = 60;
-    
-    const polylinePoints = points.map((p, i) => {
-      const x = (i / (points.length - 1)) * width;
-      const y = height - (p / max) * height;
-      return `${x},${y}`;
-    }).join(' ');
+  // New Timeline Calculation
+  const calculateTimeline = () => {
+    const startParts = hikeDetails.startTime.split(':').map(Number);
+    const startDate = new Date();
+    startDate.setHours(startParts[0], startParts[1], 0);
+
+    const turnaroundParts = turnaround.split(':').map(Number);
+    const turnaroundDate = new Date();
+    turnaroundDate.setHours(turnaroundParts[0], turnaroundParts[1], 0);
+    if (turnaroundDate < startDate) turnaroundDate.setDate(turnaroundDate.getDate() + 1);
+
+    const halfDurationMs = turnaroundDate.getTime() - startDate.getTime();
+    const endDate = new Date(startDate.getTime() + halfDurationMs * 2);
+
+    const formatTime = (d: Date) => d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+
+    return {
+      start: formatTime(startDate),
+      turnaround: formatTime(turnaroundDate),
+      end: formatTime(endDate)
+    };
+  };
+
+  const timeline = calculateTimeline();
+
+  // Share Card Generation Logic
+  const generateShareCard = (format: 'minimal' | 'full' | 'detailed') => {
+    const header = `TrailSense Hike Plan — ${hikeDetails.trailName}`;
+    const date = `📅 ${hikeDetails.date}`;
+    const riskEmoji = riskAnalysis?.level === 'Low' ? '🟢' : riskAnalysis?.level === 'Moderate' ? '🟡' : riskAnalysis?.level === 'Elevated' ? '🟠' : '🔴';
+    const safety = `${riskEmoji} Safety Level: ${riskAnalysis?.level}`;
+    const verdict = `Verdict: ${report.summary.verdict}`;
+    const footer = `Generated by TrailSense — verify conditions before hiking`;
+    const highlights = report.summary.highlights.length > 0 ? `✨ Highlights: ${report.summary.highlights.join(', ')}` : '';
+
+    if (format === 'minimal') {
+      return `
+${header}
+${date}
+🚶 ${report.summary.stats}
+⚠ Risk: ${report.summary.riskFactor}
+${safety}
+${verdict}
+${footer}`;
+    } else if (format === 'full') {
+        return `
+${header}
+${date} • ${hikeDetails.location}
+
+📊 Quick Stats
+• ${report.summary.stats}
+• Start: ${hikeDetails.startTime}
+• Turnaround: ${timeline.turnaround}
+• Sunset: ${effectiveData.sunsetTime || '--:--'}
+
+${safety}
+⚠ Top Risk: ${report.summary.riskFactor}
+${verdict}
+
+${highlights}
+
+🌦 Weather Snapshot
+• ${effectiveData.tempC}°C, ${effectiveData.weatherCondition}
+• Rain/Precip: check forecast
+
+🥾 Packing Essentials
+• Water, Nav, Light, First Aid, Layers
+• Recommended: ${report.ulGear}
+
+${footer}`;
+    } else {
+        // Detailed
+        return `
+${header}
+${date} • ${hikeDetails.location}
+
+SAFETY ANALYSIS
+${safety}
+• Main Risk: ${report.summary.riskFactor}
+• Verdict: ${report.summary.verdict}
+• Good to know: ${report.safety.pros.slice(0,2).join(', ')}
+• Watch out for: ${report.safety.cons.slice(0,3).join(', ')}
+
+ROUTE & TIMING
+• ${report.summary.stats}
+• Difficulty: ${report.summary.difficulty}
+• Start: ${hikeDetails.startTime}
+• Turnaround Target: ${timeline.turnaround} (Strict)
+• Est. Finish: ${timeline.end}
+• Sunset: ${effectiveData.sunsetTime}
+• ${highlights}
+
+CONDITIONS
+• Weather: ${effectiveData.tempC}°C, ${effectiveData.weatherCondition}
+• Pack Weight Est: ~${packWeight}kg (UL Score: ${ulScore})
+
+GEAR CHECKLIST
+• 10 Essentials (Nav, Sun, Light, First Aid, Knife, Fire, Shelter, Food, Water, Clothes)
+• Special Item: ${report.ulGear}
+• Why? ${report.gearReason || 'Standard safety precaution.'}
+
+${footer}`;
+    }
+  };
+
+  const handleOpenShare = () => {
+    setShareFormat('full');
+    setShareText(generateShareCard('full'));
+    setShowShareModal(true);
+  };
+
+  const handleFormatChange = (fmt: 'minimal' | 'full' | 'detailed') => {
+    setShareFormat(fmt);
+    setShareText(generateShareCard(fmt));
+  };
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(shareText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+
+  // Sidebar Component
+  const UsefulToolsSidebar = () => {
+    const [checklist, setChecklist] = useState([
+        { id: 1, text: 'Navigation (Map/App)', checked: false },
+        { id: 2, text: 'Headlamp + Extra Batteries', checked: false },
+        { id: 3, text: 'Sun Protection', checked: false },
+        { id: 4, text: 'First Aid Kit', checked: false },
+        { id: 5, text: 'Knife / Repair Kit', checked: false },
+        { id: 6, text: 'Fire Starter', checked: false },
+        { id: 7, text: 'Emergency Shelter', checked: false },
+        { id: 8, text: 'Extra Food', checked: false },
+        { id: 9, text: 'Extra Water', checked: false },
+        { id: 10, text: 'Extra Clothes', checked: false },
+    ]);
+
+    const toggleItem = (id: number) => {
+        setChecklist(checklist.map(i => i.id === id ? { ...i, checked: !i.checked } : i));
+    };
 
     return (
-      <svg width="100%" height="80" viewBox={`0 0 ${width} ${height}`} className="overflow-visible mt-2">
-         <defs>
-            <linearGradient id="grad" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" style={{stopColor: '#38a36b', stopOpacity: 0.5}} />
-              <stop offset="100%" style={{stopColor: '#38a36b', stopOpacity: 0}} />
-            </linearGradient>
-         </defs>
-         <polyline 
-            fill="none" 
-            stroke="#38a36b" 
-            strokeWidth="2" 
-            points={polylinePoints} 
-            className="animate-dash"
-            strokeDasharray="1000"
-            strokeDashoffset="1000"
-         />
-         <polygon points={`${polylinePoints} ${width},${height} 0,${height}`} fill="url(#grad)" opacity="0.5" />
-      </svg>
+        <div className="space-y-6">
+            {/* Weather Snapshot */}
+            <div className="bg-white dark:bg-stone-800 p-4 rounded-xl border border-stone-200 dark:border-stone-700 shadow-sm">
+                <h4 className="font-bold text-stone-700 dark:text-stone-300 mb-3 flex items-center gap-2">
+                    <IconCloud className="w-4 h-4 text-forest-500" /> Current Conditions
+                </h4>
+                <div className="flex justify-between items-center">
+                    <div>
+                        <span className="text-3xl font-black text-stone-800 dark:text-stone-100">{effectiveData.tempC}°C</span>
+                        <p className="text-xs text-stone-500 dark:text-stone-400 font-medium">{effectiveData.weatherCondition}</p>
+                    </div>
+                    <div className="text-right">
+                         <span className="text-xs text-stone-400 uppercase font-bold">Sunset</span>
+                         <p className="text-stone-700 dark:text-stone-300 font-mono">{effectiveData.sunsetTime || '--:--'}</p>
+                    </div>
+                </div>
+                <p className="text-[10px] text-stone-400 dark:text-stone-500 mt-2 italic text-right border-t border-stone-100 dark:border-stone-700 pt-2">AI Estimate. Verify with local forecast.</p>
+            </div>
+            
+            {/* Personalized AI Tips */}
+            <div className="bg-gradient-to-br from-forest-600 to-forest-800 p-4 rounded-xl border border-forest-500 shadow-md text-white">
+                 <h4 className="font-bold text-white mb-3 flex items-center gap-2">
+                    <IconBot className="w-4 h-4" /> Your AI Tips
+                 </h4>
+                 <ul className="space-y-2">
+                    {report.summary.tips && report.summary.tips.length > 0 ? (
+                        report.summary.tips.map((tip, i) => (
+                            <li key={i} className="flex items-start gap-2 text-xs font-medium opacity-90">
+                                <span className="mt-1 w-1.5 h-1.5 bg-white/50 rounded-full flex-shrink-0"></span>
+                                {tip}
+                            </li>
+                        ))
+                    ) : (
+                        <li className="text-xs italic opacity-70">Enjoy your hike and pace yourself!</li>
+                    )}
+                 </ul>
+            </div>
+
+            {/* Ten Essentials Checklist */}
+            <div className="bg-white dark:bg-stone-800 p-4 rounded-xl border border-stone-200 dark:border-stone-700 shadow-sm">
+                <h4 className="font-bold text-stone-700 dark:text-stone-300 mb-3 flex items-center gap-2">
+                    <IconFirstAid className="w-4 h-4 text-red-500" /> 10 Essentials
+                </h4>
+                <div className="space-y-2">
+                    {checklist.map(item => (
+                        <label key={item.id} className="flex items-center gap-2 cursor-pointer group">
+                            <input 
+                                type="checkbox" 
+                                checked={item.checked} 
+                                onChange={() => toggleItem(item.id)}
+                                className="w-4 h-4 rounded border-stone-300 text-forest-600 focus:ring-forest-500 cursor-pointer" 
+                            />
+                            <span className={`text-xs transition-colors ${item.checked ? 'text-stone-400 line-through' : 'text-stone-700 dark:text-stone-300 group-hover:text-forest-600'}`}>
+                                {item.text}
+                            </span>
+                        </label>
+                    ))}
+                </div>
+            </div>
+
+            {/* Share Plan Button */}
+            <div className="bg-gradient-to-br from-forest-50 to-white dark:from-stone-800 dark:to-stone-900 p-4 rounded-xl border border-forest-100 dark:border-stone-700 shadow-sm text-center">
+                 <h4 className="font-bold text-stone-800 dark:text-stone-200 mb-2">Hiking with a friend?</h4>
+                 <p className="text-xs text-stone-500 dark:text-stone-400 mb-3">Share your plan and turnaround time.</p>
+                 <button 
+                    onClick={handleOpenShare}
+                    className="w-full py-2 bg-white dark:bg-stone-700 border border-stone-200 dark:border-stone-600 rounded-lg text-sm font-bold text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-600 transition-colors flex items-center justify-center gap-2"
+                 >
+                    <IconShare className="w-4 h-4" />
+                    Share Plan
+                 </button>
+            </div>
+        </div>
     );
-  }
+  };
 
   return (
     <div className="space-y-6 animate-fade-in-up pb-20">
@@ -171,7 +433,7 @@ const ReportView: React.FC<ReportViewProps> = ({
              className="text-xs bg-stone-700 hover:bg-stone-600 px-3 py-1.5 rounded-lg transition-colors border border-stone-600 font-medium flex items-center gap-1"
            >
              <IconRefresh className="w-3 h-3" />
-             Re-run with today's conditions
+             Re-run
            </button>
         </div>
       )}
@@ -205,22 +467,33 @@ const ReportView: React.FC<ReportViewProps> = ({
                 {report.summary.verdict}
             </span>
         </div>
-        <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div>
                 <span className="text-xs text-stone-500 dark:text-stone-400 uppercase tracking-wider font-semibold block mb-1">
                   Difficulty
                   <Tooltip text="How hard the hike feels physically. 'Hard' usually means lots of climbing." />
                 </span>
                 <span className="text-lg font-bold text-stone-800 dark:text-stone-200">{report.summary.difficulty}</span>
-                {/* Elevation Graph */}
-                <div className="mt-2 opacity-80">
-                   {renderElevationGraph()}
-                   <div className="flex justify-between text-[10px] text-stone-400 font-mono mt-1">
-                      <span>START</span>
-                      <span>MAX {Math.round(Math.max(...(effectiveData.elevationProfile || [0])))}m</span>
-                      <span>END</span>
-                   </div>
+                
+                {/* REPLACED CHART WITH TIMELINE */}
+                <div className="mt-3 relative pl-3 border-l-2 border-stone-200 dark:border-stone-600 space-y-4">
+                    <div className="relative">
+                        <div className="absolute -left-[17px] top-1 w-2.5 h-2.5 rounded-full bg-green-500 border-2 border-white dark:border-stone-800"></div>
+                        <p className="text-[10px] uppercase font-bold text-stone-400 leading-none">Start</p>
+                        <p className="text-xs font-mono font-semibold text-stone-700 dark:text-stone-300">{timeline.start}</p>
+                    </div>
+                    <div className="relative">
+                        <div className="absolute -left-[17px] top-1 w-2.5 h-2.5 rounded-full bg-amber-500 border-2 border-white dark:border-stone-800"></div>
+                        <p className="text-[10px] uppercase font-bold text-stone-400 leading-none">Turnaround</p>
+                        <p className="text-xs font-mono font-semibold text-stone-700 dark:text-stone-300">{timeline.turnaround}</p>
+                    </div>
+                    <div className="relative">
+                        <div className="absolute -left-[17px] top-1 w-2.5 h-2.5 rounded-full bg-stone-400 border-2 border-white dark:border-stone-800"></div>
+                        <p className="text-[10px] uppercase font-bold text-stone-400 leading-none">Finish</p>
+                        <p className="text-xs font-mono font-semibold text-stone-700 dark:text-stone-300">{timeline.end}</p>
+                    </div>
                 </div>
+
             </div>
             <div>
                 <span className="text-xs text-stone-500 dark:text-stone-400 uppercase tracking-wider font-semibold block mb-1">
@@ -228,16 +501,25 @@ const ReportView: React.FC<ReportViewProps> = ({
                   <Tooltip text="Distance is round-trip length. Gain is total vertical climbing." />
                 </span>
                 <span className="text-lg font-bold text-stone-800 dark:text-stone-200 block">{report.summary.stats}</span>
-                
-                {/* Dynamic Turnaround */}
-                <div className="mt-4 p-2 bg-stone-50 dark:bg-stone-900/50 rounded-lg border border-stone-100 dark:border-stone-700 flex items-start gap-2">
-                    <IconTime className="w-4 h-4 text-forest-600 mt-0.5" />
-                    <div>
-                      <span className="text-xs font-bold text-forest-800 dark:text-forest-300 block">Turnaround Target</span>
-                      <span className="text-sm font-mono text-stone-600 dark:text-stone-300">{turnaround}</span>
-                      <span className="text-[10px] text-stone-400 block leading-tight mt-0.5">Estimated halfway time to avoid darkness.</span>
-                    </div>
-                </div>
+            </div>
+            {/* Highlights Section */}
+            <div>
+                <span className="text-xs text-stone-500 dark:text-stone-400 uppercase tracking-wider font-semibold block mb-1">
+                  Awesome Highlights
+                  <Tooltip text="Cool features to look forward to on this trail." />
+                </span>
+                <ul className="space-y-1 mt-1">
+                  {report.summary.highlights && report.summary.highlights.length > 0 ? (
+                    report.summary.highlights.map((h, i) => (
+                      <li key={i} className="flex items-start gap-1.5 text-sm font-medium text-stone-700 dark:text-stone-300">
+                         <IconStar className="w-3.5 h-3.5 text-yellow-500 mt-0.5 flex-shrink-0" />
+                         <span>{h}</span>
+                      </li>
+                    ))
+                  ) : (
+                    <li className="text-sm text-stone-400 italic">No specific highlights found.</li>
+                  )}
+                </ul>
             </div>
             <div>
                 <span className="text-xs text-stone-500 dark:text-stone-400 uppercase tracking-wider font-semibold block mb-1">
@@ -272,7 +554,6 @@ const ReportView: React.FC<ReportViewProps> = ({
              </span>
            </div>
            
-           {/* Visual Bar */}
            <div className="h-2.5 w-full bg-stone-100 dark:bg-stone-700 rounded-full overflow-hidden flex">
               <div 
                 className={`h-full transition-all duration-500 ${riskAnalysis.color}`} 
@@ -280,7 +561,6 @@ const ReportView: React.FC<ReportViewProps> = ({
               ></div>
            </div>
 
-           {/* Risk Details Modal/Panel */}
            {showRiskDetails && (
              <div className="mt-4 p-4 bg-stone-50 dark:bg-stone-900 rounded-xl border border-stone-200 dark:border-stone-700 animate-fade-in">
                <h5 className="font-bold text-sm text-stone-800 dark:text-stone-200 mb-2">Why this risk level?</h5>
@@ -300,7 +580,7 @@ const ReportView: React.FC<ReportViewProps> = ({
       )}
 
       {/* "What If" Exploration Mode */}
-      <div className="bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl overflow-hidden">
+      <div className="bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl overflow-hidden shadow-sm">
         <button 
            onClick={() => setShowWhatIf(!showWhatIf)} 
            className="w-full flex items-center justify-between p-4 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
@@ -315,45 +595,151 @@ const ReportView: React.FC<ReportViewProps> = ({
         </button>
         
         {showWhatIf && (
-          <div className="p-4 border-t border-stone-200 dark:border-stone-700 space-y-4 animate-fade-in">
-             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Temp Slider */}
+          <div className="p-4 border-t border-stone-200 dark:border-stone-700 space-y-6 animate-fade-in bg-white dark:bg-stone-800/50">
+             
+             {/* SIMULATED DASHBOARD */}
+             {whatIfRisk && (
+               <div className="bg-stone-50 dark:bg-stone-900 p-4 rounded-xl border border-stone-200 dark:border-stone-700 flex flex-wrap gap-4 items-center justify-between">
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-stone-400 block mb-1">New Safety Level</span>
+                    <span className={`text-sm font-bold px-2 py-1 rounded ${whatIfRisk.color.replace('bg-', 'text-').replace('500', '700').replace('600', '800').replace('400', '800')}`}>
+                        {whatIfRisk.level}
+                    </span>
+                  </div>
+                  <div>
+                     <span className="text-[10px] uppercase font-bold text-stone-400 block mb-1">New UL Score</span>
+                     <span className={`font-mono font-bold ${whatIfULScore > 80 ? 'text-green-600' : whatIfULScore > 50 ? 'text-amber-500' : 'text-red-500'}`}>
+                       {whatIfULScore}
+                     </span>
+                  </div>
+                  {whatIfWarnings.length > 0 && (
+                      <div className="flex gap-1 flex-wrap justify-end">
+                          {whatIfWarnings.map((w, i) => (
+                             <span key={i} className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                                w.severity === 'red' ? 'bg-red-50 text-red-600 border-red-100' : 'bg-yellow-50 text-yellow-600 border-yellow-100'
+                             }`}>
+                                {w.label}
+                             </span>
+                          ))}
+                      </div>
+                  )}
+               </div>
+             )}
+
+             {/* CONTROLS */}
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
+                
+                {/* 1. Temp Slider */}
                 <div>
-                   <label className="text-xs font-bold text-stone-500 uppercase flex justify-between">
+                   <label className="text-xs font-bold text-stone-500 uppercase flex justify-between mb-2">
                       Temperature Change
-                      <span className="text-stone-800 dark:text-stone-200">{tempAdjust > 0 ? '+' : ''}{tempAdjust}°C</span>
+                      <span className="text-stone-800 dark:text-stone-200 bg-stone-100 dark:bg-stone-700 px-2 rounded">{tempAdjust > 0 ? '+' : ''}{tempAdjust}°C</span>
                    </label>
                    <input 
                      type="range" min="-10" max="10" step="1" 
                      value={tempAdjust} 
                      onChange={(e) => setTempAdjust(parseInt(e.target.value))}
-                     className="w-full h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer accent-forest-600 mt-2"
+                     className="w-full h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer accent-forest-600"
                    />
                 </div>
-                {/* Dist Slider */}
+
+                {/* 2. Dist Slider */}
                 <div>
-                   <label className="text-xs font-bold text-stone-500 uppercase flex justify-between">
+                   <label className="text-xs font-bold text-stone-500 uppercase flex justify-between mb-2">
                       Distance Change
-                      <span className="text-stone-800 dark:text-stone-200">{distAdjust > 0 ? '+' : ''}{distAdjust}km</span>
+                      <span className="text-stone-800 dark:text-stone-200 bg-stone-100 dark:bg-stone-700 px-2 rounded">{distAdjust > 0 ? '+' : ''}{distAdjust}km</span>
                    </label>
                    <input 
                      type="range" min="-5" max="10" step="1" 
                      value={distAdjust} 
                      onChange={(e) => setDistAdjust(parseInt(e.target.value))}
-                     className="w-full h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer accent-forest-600 mt-2"
+                     className="w-full h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer accent-forest-600"
                    />
                 </div>
+
+                {/* 3. Start Time Slider */}
+                <div>
+                   <label className="text-xs font-bold text-stone-500 uppercase flex justify-between mb-2 flex items-center gap-2">
+                      <div className="flex items-center gap-1"><IconTime className="w-3 h-3"/> Start Time Change</div>
+                      <span className="text-stone-800 dark:text-stone-200 bg-stone-100 dark:bg-stone-700 px-2 rounded">{timeAdjust > 0 ? '+' : ''}{timeAdjust}h</span>
+                   </label>
+                   <input 
+                     type="range" min="-4" max="8" step="1" 
+                     value={timeAdjust} 
+                     onChange={(e) => setTimeAdjust(parseInt(e.target.value))}
+                     className="w-full h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer accent-forest-600"
+                   />
+                   <p className="text-[10px] text-stone-400 mt-1 text-right">Simulates earlier or later start</p>
+                </div>
+
+                {/* 4. Pack Weight Slider */}
+                <div>
+                   <label className="text-xs font-bold text-stone-500 uppercase flex justify-between mb-2 flex items-center gap-2">
+                      <div className="flex items-center gap-1"><IconWeight className="w-3 h-3"/> Pack Weight</div>
+                      <span className="text-stone-800 dark:text-stone-200 bg-stone-100 dark:bg-stone-700 px-2 rounded">{weightAdjust > 0 ? '+' : ''}{weightAdjust}kg</span>
+                   </label>
+                   <input 
+                     type="range" min="-5" max="15" step="1" 
+                     value={weightAdjust} 
+                     onChange={(e) => setWeightAdjust(parseInt(e.target.value))}
+                     className="w-full h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer accent-forest-600"
+                   />
+                   <p className="text-[10px] text-stone-400 mt-1 text-right">Heavier pack affects Risk & Score</p>
+                </div>
+                
+                 {/* 5. Fitness Level Override */}
+                <div>
+                   <label className="text-xs font-bold text-stone-500 uppercase flex justify-between mb-2 flex items-center gap-2">
+                      <div className="flex items-center gap-1"><IconChart className="w-3 h-3"/> Fitness Level</div>
+                   </label>
+                   <div className="flex bg-stone-200 dark:bg-stone-700 p-1 rounded-lg">
+                      {['low', 'medium', 'high'].map(lvl => (
+                          <button
+                            key={lvl}
+                            onClick={() => setFitnessOverride(lvl)}
+                            className={`flex-1 py-1.5 text-xs font-medium rounded capitalize transition-all ${
+                                (fitnessOverride || userProfile.fitness) === lvl 
+                                ? 'bg-white dark:bg-stone-600 text-forest-700 dark:text-forest-300 shadow-sm' 
+                                : 'text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-300'
+                            }`}
+                          >
+                             {lvl}
+                          </button>
+                      ))}
+                   </div>
+                   <p className="text-[10px] text-stone-400 mt-1 text-right">See how improved fitness lowers risk</p>
+                </div>
+
+                {/* 6. Weather Select */}
+                <div className="md:col-span-2">
+                   <label className="text-xs font-bold text-stone-500 uppercase block mb-2 flex items-center gap-1">
+                      <IconCloud className="w-3 h-3" /> Weather Override
+                   </label>
+                   <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                      {[
+                          { val: '', label: 'Original' },
+                          { val: 'Clear Sunny', label: '☀️ Sunny' },
+                          { val: 'Rainy Wet', label: '🌧️ Rainy' },
+                          { val: 'Thunder Storm', label: '⚡ Storm' },
+                          { val: 'Snowy Ice', label: '❄️ Snowy' },
+                          { val: 'Foggy Mist', label: '🌫️ Foggy' },
+                      ].map((opt) => (
+                        <button
+                           key={opt.val}
+                           onClick={() => setWeatherOverride(opt.val)}
+                           className={`px-3 py-2 rounded-lg text-xs font-bold border transition-colors whitespace-nowrap ${
+                             weatherOverride === opt.val 
+                               ? 'bg-forest-600 text-white border-forest-600' 
+                               : 'bg-white dark:bg-stone-700 text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-600 hover:bg-stone-50 dark:hover:bg-stone-600'
+                           }`}
+                        >
+                           {opt.label}
+                        </button>
+                      ))}
+                   </div>
+                </div>
+
              </div>
-             
-             {/* Result Preview */}
-             {whatIfRisk && (
-               <div className="bg-white dark:bg-stone-800 p-3 rounded-lg flex items-center justify-between shadow-sm">
-                  <span className="text-sm text-stone-600 dark:text-stone-300">New Safety Level:</span>
-                  <span className={`text-sm font-bold px-2 py-1 rounded ${whatIfRisk.color.replace('bg-', 'text-').replace('500', '700').replace('600', '800').replace('400', '800')}`}>
-                    {whatIfRisk.level}
-                  </span>
-               </div>
-             )}
           </div>
         )}
       </div>
@@ -498,68 +884,213 @@ const ReportView: React.FC<ReportViewProps> = ({
         </div>
       </div>
 
-      {/* UL Gear Score Section */}
-      <div className="bg-white dark:bg-stone-800 rounded-2xl shadow-sm border border-stone-200 dark:border-stone-700 p-4">
-         <div className="flex items-center gap-2 mb-4">
-            <IconScale className="w-5 h-5 text-forest-600" />
-            <h3 className="font-bold text-stone-800 dark:text-stone-200 text-sm">Packing Weight & UL Score</h3>
-         </div>
-         
-         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            {/* Weight Bar */}
-            <div>
-               <div className="flex justify-between text-xs font-semibold mb-1 text-stone-500 dark:text-stone-400">
-                  <span>Estimated Pack Weight</span>
-                  <span>~{packWeight} kg</span>
-               </div>
-               <div className="h-4 bg-stone-100 dark:bg-stone-700 rounded-full overflow-hidden relative">
-                   {/* Danger Zone Markers */}
-                   <div className="absolute right-0 top-0 bottom-0 w-[20%] bg-red-100/30"></div>
-                   
-                   <div 
-                     className={`h-full rounded-full transition-all duration-1000 ${
-                       packWeight < 5 ? 'bg-green-500' : packWeight < 8 ? 'bg-amber-400' : 'bg-red-500'
-                     }`}
-                     style={{ width: `${Math.min(100, (packWeight / 12) * 100)}%` }}
-                   ></div>
-               </div>
-               <p className="text-[10px] text-stone-400 mt-1 italic">Includes water, food & layers based on distance/weather.</p>
+      {/* NEW SIDEBAR SPLIT LAYOUT */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        {/* Left Column: Gear */}
+        <div className="lg:col-span-2 space-y-6">
+            {/* UL Gear Score Section */}
+            <div className="bg-white dark:bg-stone-800 rounded-2xl shadow-sm border border-stone-200 dark:border-stone-700 p-4">
+                <div className="flex items-center gap-2 mb-4">
+                    <IconScale className="w-5 h-5 text-forest-600" />
+                    <h3 className="font-bold text-stone-800 dark:text-stone-200 text-sm">Packing Weight & UL Score</h3>
+                </div>
+                
+                <div className="space-y-6">
+                    {/* Weight Bar */}
+                    <div>
+                    <div className="flex justify-between text-xs font-semibold mb-1 text-stone-500 dark:text-stone-400">
+                        <span>Estimated Pack Weight</span>
+                        <span>~{packWeight} kg</span>
+                    </div>
+                    <div className="h-4 bg-stone-100 dark:bg-stone-700 rounded-full overflow-hidden relative">
+                        {/* Danger Zone Markers */}
+                        <div className="absolute right-0 top-0 bottom-0 w-[20%] bg-red-100/30"></div>
+                        
+                        <div 
+                            className={`h-full rounded-full transition-all duration-1000 ${
+                            packWeight < 5 ? 'bg-green-500' : packWeight < 8 ? 'bg-amber-400' : 'bg-red-500'
+                            }`}
+                            style={{ width: `${Math.min(100, (packWeight / 12) * 100)}%` }}
+                        ></div>
+                    </div>
+                    <p className="text-[10px] text-stone-400 mt-1 italic">Includes water, food & layers based on distance/weather.</p>
+                    </div>
+
+                    {/* Score & Gear */}
+                    <div>
+                        <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs font-bold text-stone-500 dark:text-stone-400 uppercase">Ultralight Score</span>
+                            <span className={`text-xl font-black ${ulScore > 80 ? 'text-green-600' : ulScore > 50 ? 'text-amber-500' : 'text-red-500'}`}>
+                                {ulScore}
+                            </span>
+                        </div>
+                        <div className="bg-stone-50 dark:bg-stone-900 p-3 rounded-lg border border-stone-100 dark:border-stone-700">
+                            <span className="text-[10px] font-bold text-forest-600 dark:text-forest-400 uppercase block mb-1">Recommended Gear</span>
+                            <p className="text-xs text-stone-700 dark:text-stone-300 font-bold">{report.ulGear}</p>
+                            
+                            {/* Interactive Gear Dropdowns */}
+                            <div className="mt-3 space-y-2">
+                                {/* Why this gear? */}
+                                <div>
+                                    <button 
+                                        onClick={() => setShowGearReason(!showGearReason)}
+                                        className="text-[10px] uppercase font-bold text-stone-500 hover:text-forest-600 flex items-center gap-1 transition-colors"
+                                    >
+                                        {showGearReason ? 'Hide Reasoning' : 'Why this gear?'}
+                                        <span className={`transition-transform ${showGearReason ? 'rotate-180' : ''}`}>▼</span>
+                                    </button>
+                                    {showGearReason && (
+                                        <p className="mt-1 text-xs text-stone-600 dark:text-stone-400 animate-fade-in pl-2 border-l-2 border-forest-200">
+                                            {report.gearReason || "Based on current weather and trail conditions."}
+                                        </p>
+                                    )}
+                                </div>
+
+                                {/* Full Packing List */}
+                                <div>
+                                    <button 
+                                        onClick={() => setShowFullGearList(!showFullGearList)}
+                                        className="text-[10px] uppercase font-bold text-stone-500 hover:text-forest-600 flex items-center gap-1 transition-colors"
+                                    >
+                                        {showFullGearList ? 'Hide Full List' : 'Full Packing List'}
+                                        <span className={`transition-transform ${showFullGearList ? 'rotate-180' : ''}`}>▼</span>
+                                    </button>
+                                    {showFullGearList && report.gearList && report.gearList.length > 0 && (
+                                        <ul className="mt-1 space-y-1 animate-fade-in pl-2 border-l-2 border-forest-200">
+                                            {report.gearList.map((item, idx) => (
+                                                <li key={idx} className="text-xs text-stone-600 dark:text-stone-400 flex items-start gap-1.5">
+                                                    <span className="mt-1 w-1 h-1 bg-stone-400 rounded-full flex-shrink-0"></span>
+                                                    {item}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                </div>
+                            </div>
+
+                            <p className="text-[10px] text-stone-400 dark:text-stone-500 italic mt-3 leading-tight">
+                                the ai may have hallucintaed, also this is not sponsored
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {/* Right Column: Chat Assistant & Useful Tools Sidebar */}
+        <div className="lg:col-span-1 space-y-6">
+            
+            {/* NEW CHAT PANEL */}
+            <div className="bg-white dark:bg-stone-800 rounded-2xl shadow-sm border border-stone-200 dark:border-stone-700 flex flex-col h-[300px]">
+                <div className="p-3 border-b border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-900/50 flex items-center gap-2">
+                    <IconBot className="w-4 h-4 text-forest-600" />
+                    <h3 className="text-xs font-bold text-stone-700 dark:text-stone-300 uppercase tracking-wide">Trip Assistant</h3>
+                </div>
+                
+                <div className="flex-1 overflow-y-auto p-3 space-y-3 scrollbar-hide relative">
+                    {chatHistory.map((msg, i) => (
+                        <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                            <div className={`max-w-[85%] p-2 rounded-xl text-xs ${
+                                msg.role === 'user' 
+                                ? 'bg-forest-600 text-white rounded-br-none' 
+                                : 'bg-stone-100 dark:bg-stone-700 text-stone-800 dark:text-stone-200 rounded-bl-none'
+                            }`}>
+                                {msg.text}
+                            </div>
+                        </div>
+                    ))}
+                    
+                    {/* Isolated Loading Indicator inside Chat */}
+                    {isLoading && (
+                        <div className="flex justify-start">
+                            <div className="bg-stone-100 dark:bg-stone-700 p-2 rounded-xl rounded-bl-none flex gap-1 items-center">
+                                <div className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce"></div>
+                                <div className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce delay-75"></div>
+                                <div className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce delay-150"></div>
+                            </div>
+                        </div>
+                    )}
+                    <div ref={chatEndRef} />
+                </div>
+
+                <div className="p-2 border-t border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-900">
+                    <div className="flex gap-2">
+                        <input 
+                            type="text" 
+                            placeholder="Ask follow-up..."
+                            className="flex-1 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-600 rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-forest-500 outline-none text-stone-800 dark:text-stone-200"
+                            value={chatInput}
+                            onChange={(e) => setChatInput(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleSubmitChat(e)}
+                            disabled={isLoading}
+                        />
+                        <button 
+                            onClick={handleSubmitChat}
+                            disabled={!chatInput.trim() || isLoading}
+                            className="p-2 bg-forest-600 text-white rounded-lg hover:bg-forest-700 disabled:opacity-50 transition-colors"
+                        >
+                            <IconSend className="w-4 h-4" />
+                        </button>
+                    </div>
+                </div>
             </div>
 
-            {/* Score & Gear */}
-            <div>
-               <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-bold text-stone-500 dark:text-stone-400 uppercase">Ultralight Score</span>
-                  <span className={`text-xl font-black ${ulScore > 80 ? 'text-green-600' : ulScore > 50 ? 'text-amber-500' : 'text-red-500'}`}>
-                    {ulScore}
-                  </span>
-               </div>
-               <div className="bg-stone-50 dark:bg-stone-900 p-3 rounded-lg border border-stone-100 dark:border-stone-700">
-                  <span className="text-[10px] font-bold text-forest-600 dark:text-forest-400 uppercase block mb-1">Recommended Gear</span>
-                  <p className="text-xs text-stone-700 dark:text-stone-300">{report.ulGear}</p>
-               </div>
-            </div>
-         </div>
+            <UsefulToolsSidebar />
+        </div>
       </div>
 
-      {/* 4. Follow-up Question Input */}
-      <div className="bg-stone-100 dark:bg-stone-900 rounded-2xl p-2 border border-stone-200 dark:border-stone-700 shadow-inner flex items-center gap-2">
-          <input 
-            type="text" 
-            placeholder="Ask a follow-up question (e.g. 'What if I start at 6am?', 'Is it dog friendly?')"
-            className="flex-1 bg-transparent border-none px-4 py-3 text-sm focus:ring-0 outline-none text-stone-800 dark:text-stone-200 placeholder-stone-500"
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSubmitFollowUp(e)}
-          />
-          <button 
-            onClick={handleSubmitFollowUp}
-            disabled={!question.trim()}
-            className="p-3 bg-forest-600 text-white rounded-xl shadow-sm hover:bg-forest-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
-          >
-             <IconSend className="w-5 h-5" />
-          </button>
-      </div>
+      {/* Share Modal */}
+      {showShareModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/80 backdrop-blur-sm animate-fade-in">
+            <div className="bg-white dark:bg-stone-900 w-full max-w-md rounded-2xl shadow-2xl border border-stone-200 dark:border-stone-700 overflow-hidden flex flex-col max-h-[90vh]">
+                <div className="p-4 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center bg-stone-50 dark:bg-stone-900/50">
+                    <h3 className="font-bold text-lg text-stone-800 dark:text-stone-200">Share Hike Plan</h3>
+                    <button onClick={() => setShowShareModal(false)} className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-200">
+                        ✕
+                    </button>
+                </div>
+                
+                <div className="p-4 border-b border-stone-100 dark:border-stone-800 bg-white dark:bg-stone-900 sticky top-0 z-10">
+                    <div className="flex bg-stone-100 dark:bg-stone-800 p-1 rounded-lg">
+                        {(['minimal', 'full', 'detailed'] as const).map((fmt) => (
+                            <button
+                                key={fmt}
+                                onClick={() => handleFormatChange(fmt)}
+                                className={`flex-1 py-2 text-xs font-bold uppercase rounded-md transition-all ${
+                                    shareFormat === fmt 
+                                    ? 'bg-white dark:bg-stone-700 text-forest-600 dark:text-forest-400 shadow-sm' 
+                                    : 'text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-200'
+                                }`}
+                            >
+                                {fmt}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4 bg-stone-50 dark:bg-stone-950/30">
+                    <pre className="whitespace-pre-wrap font-mono text-xs text-stone-600 dark:text-stone-300 bg-white dark:bg-stone-800 p-4 rounded-xl border border-stone-200 dark:border-stone-700 shadow-sm">
+                        {shareText}
+                    </pre>
+                </div>
+
+                <div className="p-4 bg-white dark:bg-stone-900 border-t border-stone-100 dark:border-stone-800">
+                    <button 
+                        onClick={handleCopy}
+                        className={`w-full py-3 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
+                            copied 
+                            ? 'bg-green-500 text-white shadow-lg shadow-green-500/20' 
+                            : 'bg-stone-800 dark:bg-stone-100 text-white dark:text-stone-900 hover:bg-stone-900 dark:hover:bg-white shadow-lg'
+                        }`}
+                    >
+                        {copied ? <IconCheck className="w-4 h-4" /> : <IconShare className="w-4 h-4" />}
+                        {copied ? 'Copied to Clipboard!' : 'Copy Text'}
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
 
     </div>
   );
