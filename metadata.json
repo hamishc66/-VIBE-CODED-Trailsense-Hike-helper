@@ -1,0 +1,7 @@
+{
+  "name": "TrailSense",
+  "description": "Your intelligent, safety-conscious AI hiking companion. Plan trips, check conditions, and hike smart.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
