@@ -1,5 +1,6 @@
+
 import { GoogleGenAI } from "@google/genai";
-import { UserProfile, HikeDetails, GroundingSource, TripReport, TripReportSummary, SafetyAnalysis } from "../types";
+import { UserProfile, HikeDetails, GroundingSource, TripReport, TripReportSummary, SafetyAnalysis, TripData, SaferAlternative, RiskAnalysis } from "../types";
 
 // Initialize the client
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -42,10 +43,12 @@ export const getQuickTip = async (details: HikeDetails): Promise<string> => {
 const parseTripReport = (text: string, sources: GroundingSource[]): TripReport => {
   const summaryRegex = /---SUMMARY---([\s\S]*?)---END_SUMMARY---/;
   const safetyRegex = /---SAFETY---([\s\S]*?)---END_SAFETY---/;
+  const dataRegex = /---DATA---([\s\S]*?)---END_DATA---/;
   const contentRegex = /---CONTENT---([\s\S]*?)---END_CONTENT---/;
 
   const summaryMatch = text.match(summaryRegex);
   const safetyMatch = text.match(safetyRegex);
+  const dataMatch = text.match(dataRegex);
   const contentMatch = text.match(contentRegex);
 
   // Default values
@@ -61,6 +64,17 @@ const parseTripReport = (text: string, sources: GroundingSource[]): TripReport =
     cons: [],
     dealBreakers: []
   };
+
+  const data: TripData = {
+    distanceKm: 0,
+    elevationM: 0,
+    weatherCondition: "Unknown",
+    tempC: 20,
+    sunsetTime: "18:00",
+    elevationProfile: []
+  };
+  
+  let ulGear = "Sawyer Squeeze filter & Smartwater bottle";
 
   // Parse Summary
   if (summaryMatch) {
@@ -87,10 +101,31 @@ const parseTripReport = (text: string, sources: GroundingSource[]): TripReport =
     if (avoidMatch) safety.dealBreakers = cleanList(avoidMatch[1]);
   }
 
-  // Content is the rest or the specific block
-  const markdownContent = contentMatch ? contentMatch[1].trim() : text.replace(summaryRegex, '').replace(safetyRegex, '').trim();
+  // Parse Data
+  if (dataMatch) {
+    const lines = dataMatch[1].trim().split('\n');
+    lines.forEach(line => {
+      const parts = line.split(':');
+      if (parts.length === 2) {
+        const key = parts[0].trim();
+        const val = parts[1].trim();
+        if (key === 'Distance_KM') data.distanceKm = parseFloat(val) || 0;
+        if (key === 'Elevation_M') data.elevationM = parseFloat(val) || 0;
+        if (key === 'Weather_Condition') data.weatherCondition = val;
+        if (key === 'Temp_C') data.tempC = parseFloat(val) || 20;
+        if (key === 'Sunset_Time') data.sunsetTime = val;
+        if (key === 'Elevation_Profile') {
+            data.elevationProfile = val.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n));
+        }
+        if (key === 'UL_Gear_Suggestion') ulGear = val;
+      }
+    });
+  }
 
-  return { summary, safety, markdownContent, sources };
+  // Content is the rest or the specific block
+  const markdownContent = contentMatch ? contentMatch[1].trim() : text.replace(summaryRegex, '').replace(safetyRegex, '').replace(dataRegex, '').trim();
+
+  return { summary, safety, markdownContent, sources, data, ulGear };
 };
 
 /**
@@ -100,8 +135,9 @@ const parseTripReport = (text: string, sources: GroundingSource[]): TripReport =
 export const generateTripReport = async (
   user: UserProfile,
   hike: HikeDetails,
+  isBeginner: boolean = false,
   followUpQuestion?: string,
-  previousContext?: string
+  previousContext?: string,
 ): Promise<TripReport> => {
   
   let prompt = "";
@@ -114,6 +150,7 @@ export const generateTripReport = async (
       Hike: ${hike.trailName} at ${hike.location}
       Date: ${hike.date}, Time: ${hike.startTime}
       ${hike.notes ? `User Notes: ${hike.notes}` : ''}
+      Beginner Mode: ${isBeginner ? 'ON' : 'OFF'}
       
       PREVIOUS CONTEXT:
       ${previousContext}
@@ -134,6 +171,7 @@ export const generateTripReport = async (
       User Profile:
       - Experience: ${user.experience}
       - Fitness: ${user.fitness}
+      - Mode: ${isBeginner ? 'BEGINNER MODE (Explain jargon, be extra conservative, offer simple educational tips)' : 'Standard Mode'}
       
       Hike Details:
       - Trail: ${hike.trailName}
@@ -146,14 +184,17 @@ export const generateTripReport = async (
       If the trail name is ambiguous or missing, use the location/coordinates to find the nearest popular trail.
 
       Task:
-      1. Find current weather conditions.
-      2. Find trail details (elevation, difficulty).
-      3. Provide a TrailSense Report with:
+      1. Find current weather conditions and SUNSET time for that date/location.
+      2. Find trail details (elevation, difficulty, length).
+      3. INTERNALLY Assess Safety Level (Low, Moderate, Elevated, High) based on weather, distance, and user experience.
+      4. Provide a TrailSense Report with:
          - Conditions Overview
          - Route Summary
-         - Recommended Gear List (Tailor this specifically to the user's notes and experience level)
+         - Recommended Gear List (Tailored to risk)
          - Safety Notes
          - Extra Tips
+      
+      ${isBeginner ? 'Note: Since the user is a beginner, define terms like "switchbacks" or "scree" if used. Be very supportive but clear about turning around.' : ''}
     `;
   }
 
@@ -161,8 +202,17 @@ export const generateTripReport = async (
     
     CRITICAL OUTPUT FORMAT:
     You MUST format your response using EXACTLY the following structure blocks with the separators.
-    Do not use markdown code blocks for the separators.
     
+    ---DATA---
+    Distance_KM: [Number e.g. 12.5]
+    Elevation_M: [Number e.g. 800]
+    Weather_Condition: [Short string e.g. Sunny, Stormy, Rain]
+    Temp_C: [Number e.g. 24]
+    Sunset_Time: [Time 24h e.g. 18:45]
+    Elevation_Profile: [Comma separated list of 10 relative elevation integers representing the shape of the hike e.g. 0,10,30,80,100,80,20,0]
+    UL_Gear_Suggestion: [Short specific real UL gear suggestion e.g. "Toaks 750ml pot"]
+    ---END_DATA---
+
     ---SUMMARY---
     Difficulty: [Easy / Moderate / Hard]
     Stats: [Distance in km], [Elevation in m] gain
@@ -173,9 +223,7 @@ export const generateTripReport = async (
     ---SAFETY---
     GOOD:
     - [Positive safety factor]
-    - [Positive safety factor]
     WATCH_OUT:
-    - [Potential hazard]
     - [Potential hazard]
     AVOID_IF:
     - [Condition under which to cancel]
@@ -222,8 +270,59 @@ export const generateTripReport = async (
       summary: { difficulty: "Unknown", stats: "--", riskFactor: "Connection Error", verdict: "Try again" },
       safety: { pros: [], cons: ["Could not connect to AI service."], dealBreakers: [] },
       markdownContent: "I'm having trouble connecting to the trail network right now. Please check your internet connection.", 
-      sources: [] 
+      sources: [],
+      data: { distanceKm: 0, elevationM: 0, weatherCondition: "Unknown", tempC: 20, sunsetTime: "18:00", elevationProfile: [] }
     };
+  }
+};
+
+/**
+ * GENERATE SAFER ALTERNATIVES
+ */
+export const generateSaferAlternatives = async (
+  user: UserProfile, 
+  hike: HikeDetails,
+  riskAnalysis: RiskAnalysis
+): Promise<SaferAlternative[]> => {
+  const prompt = `
+    Suggest safer alternatives for this hike.
+    
+    User: ${user.experience}, Fitness: ${user.fitness}
+    Planned Hike: ${hike.trailName} at ${hike.location}
+    Risk Level: ${riskAnalysis.level}
+    Risk Factors: ${riskAnalysis.factors.map(f => f.name + ': ' + f.description).join(', ')}
+
+    Task:
+    Provide 2-3 specific safer alternative plans.
+    These could be:
+    - A shorter loop in the same area.
+    - An easier nearby trail.
+    - A strategy change (e.g. "Turn around at Scout Lookout instead of going to the top").
+    - A different start time.
+
+    Output as JSON list of objects with: title, description, reason.
+    Format:
+    [
+      { "title": "...", "description": "...", "reason": "..." }
+    ]
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash', // Use Flash for quick alternatives
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json'
+      }
+    });
+
+    const text = response.text;
+    if (!text) return [];
+    return JSON.parse(text) as SaferAlternative[];
+
+  } catch (e) {
+    console.error("Error fetching alternatives", e);
+    return [];
   }
 };
 
