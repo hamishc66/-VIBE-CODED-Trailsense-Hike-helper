@@ -1,5 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
-import { UserProfile, HikeDetails, GroundingSource, TripReport, TripReportSummary, SafetyAnalysis, TripData, SaferAlternative, RiskAnalysis } from "../types";
+import { UserProfile, HikeDetails, GroundingSource, TripReport, TripReportSummary, SafetyAnalysis, TripData, SaferAlternative, RiskAnalysis, RecommendedTrail } from "../types";
 
 // Initialize the client
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -17,6 +17,25 @@ Style & Tone:
 - Sound like a chill, experienced trail buddy, not a robot.
 - Short paragraphs, clear sentences.
 - Be encouraging, but always lean slightly toward safety.
+`;
+
+const SUPPORT_PERSONA = `
+You are the Technical Support Assistant for the TrailSense app.
+Your role is to help users use the application features.
+
+App Features you know about:
+- **Plan a Hike**: Users enter a trail name and location to get an AI-generated safety report.
+- **Safety Score**: A bar showing Low/Moderate/Elevated/High risk based on weather, terrain, and user fitness.
+- **What If Mode**: A simulation tool to see how changing start time, pack weight, or weather affects safety.
+- **Share Card**: A feature to generate a summary image/text to send to friends.
+- **History**: Saves previous plans locally.
+- **Gear Checklist**: Suggests UL (Ultralight) gear and provides a checklist.
+
+Rules:
+- If a user asks for hiking advice (e.g., "Is Angels Landing safe?"), politely direct them to use the main "Check Conditions" form on the home screen.
+- Focus on how to *use* the app (e.g., "How do I save a trip?", "What does the safety bar mean?").
+- Be concise, helpful, and friendly.
+- You are NOT a hiking guide in this chat; you are an app support agent.
 `;
 
 /**
@@ -390,8 +409,42 @@ export const createChatSession = () => {
   const chat = ai.chats.create({
     model: 'gemini-3-pro-preview',
     config: {
-      systemInstruction: TRAIL_SENSE_PERSONA,
+      systemInstruction: SUPPORT_PERSONA,
     }
   });
   return chat;
+};
+
+/**
+ * GET TRAIL TIPS
+ */
+export const getTrailTips = async (user: UserProfile, hike: HikeDetails): Promise<string[]> => {
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-flash-lite-latest',
+      contents: `Provide 3-4 specific, actionable tips for hiking ${hike.trailName} at ${hike.location}. User fitness: ${user.fitness}, Experience: ${user.experience}. Keep them short. Return as JSON array of strings.`,
+      config: { responseMimeType: 'application/json' }
+    });
+    return JSON.parse(response.text || "[]");
+  } catch (e) {
+    console.error("Tips error", e);
+    return ["Stay hydrated.", "Check weather before leaving.", "Carry a map."];
+  }
+};
+
+/**
+ * GET RECOMMENDED TRAILS
+ */
+export const getRecommendedTrails = async (hike: HikeDetails): Promise<RecommendedTrail[]> => {
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: `Recommend 3 other trails similar to or near ${hike.trailName} in ${hike.location}. Return as JSON array of objects with fields: name, location, difficulty, reason (short).`,
+      config: { responseMimeType: 'application/json' }
+    });
+    return JSON.parse(response.text || "[]");
+  } catch (e) {
+    console.error("Recs error", e);
+    return [];
+  }
 };

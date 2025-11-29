@@ -70,7 +70,7 @@ export interface AIResponse {
 }
 
 export interface ChatMessage {
-  id: string;
+  id?: string;
   role: 'user' | 'model';
   text: string;
   isThinking?: boolean;
@@ -105,4 +105,11 @@ export interface HistoryItem {
   hikeDetails: HikeDetails;
   report: TripReport;
   riskAnalysis: RiskAnalysis;
+}
+
+export interface RecommendedTrail {
+  name: string;
+  location: string;
+  difficulty: string;
+  reason: string;
 }

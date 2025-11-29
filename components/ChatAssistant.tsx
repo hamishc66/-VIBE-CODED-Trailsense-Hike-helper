@@ -2,12 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Chat } from '@google/genai';
 import { createChatSession } from '../services/gemini';
 import { ChatMessage } from '../types';
-import { IconBot, IconSend, IconSparkles } from './Icons';
+import { IconBot, IconSend, IconLifebuoy } from './Icons';
 
-const ChatAssistant: React.FC = () => {
+export const ChatAssistant: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { id: '1', role: 'model', text: "Hey! I'm TrailSense. Ask me anything about hiking, gear, or safety." }
+    { id: '1', role: 'model', text: "Hi! I'm TrailSense Support. Ask me how to use the app, explain features, or troubleshoot issues." }
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -63,7 +63,7 @@ const ChatAssistant: React.FC = () => {
         className={`fixed bottom-6 right-6 p-4 rounded-full shadow-lg transition-all z-50 ${
           isOpen ? 'bg-stone-800 rotate-90' : 'bg-forest-600 hover:bg-forest-700'
         } text-white`}
-        aria-label="Toggle Chat"
+        aria-label="Toggle Support Chat"
       >
         {isOpen ? (
              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
@@ -79,9 +79,9 @@ const ChatAssistant: React.FC = () => {
         <div className="fixed bottom-24 right-4 md:right-6 w-[90vw] md:w-96 bg-white rounded-2xl shadow-2xl border border-stone-200 overflow-hidden z-40 flex flex-col h-[500px]">
           {/* Header */}
           <div className="bg-forest-600 p-4 text-white flex items-center space-x-2">
-            <IconSparkles className="w-5 h-5" />
-            <h3 className="font-semibold">TrailSense Chat</h3>
-            <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full ml-auto">Pro Model</span>
+            <IconLifebuoy className="w-5 h-5" />
+            <h3 className="font-semibold">App Support</h3>
+            <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full ml-auto">Tech Help</span>
           </div>
 
           {/* Messages */}
@@ -123,8 +123,8 @@ const ChatAssistant: React.FC = () => {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-              placeholder="Ask about trails, gear..."
-              className="flex-1 bg-stone-100 border-none rounded-full px-4 py-2 text-sm focus:ring-2 focus:ring-forest-300 outline-none"
+              placeholder="How do I use 'What If' mode?"
+              className="flex-1 bg-stone-100 border-none rounded-full px-4 py-2 text-sm focus:ring-2 focus:ring-forest-300 outline-none text-stone-800"
             />
             <button
               onClick={handleSend}
@@ -139,5 +139,3 @@ const ChatAssistant: React.FC = () => {
     </>
   );
 };
-
-export default ChatAssistant;

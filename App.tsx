@@ -1,12 +1,12 @@
-
 import React, { useState, useEffect } from 'react';
 import Layout from './components/Layout';
-import ChatAssistant from './components/ChatAssistant';
+import { ChatAssistant } from './components/ChatAssistant';
 import ReportView from './components/ReportView';
 import DisclaimerModal from './components/DisclaimerModal';
+import { SidebarRight } from './components/SidebarRight';
 import { UserProfile, HikeDetails, ExperienceLevel, TripReport, RiskAnalysis, SaferAlternative, HistoryItem } from './types';
 import { generateTripReport, getQuickTip, performDeepSafetyCheck, generateSaferAlternatives } from './services/gemini';
-import { IconMountain, IconSparkles, IconInfo, IconHistory, IconTrash } from './components/Icons';
+import { IconMountain, IconSparkles, IconInfo } from './components/Icons';
 import { calculateRiskAnalysis } from './utils/riskUtils';
 
 const App: React.FC = () => {
@@ -152,9 +152,6 @@ const App: React.FC = () => {
   const handleReRunHistory = async () => {
     if (!activeHistoryItem) return;
     
-    // Use saved details but current date if in past? Or just keep same?
-    // User requested "Re-run with current conditions", so we assume "today" or keeping the planned date but re-checking weather.
-    // For simplicity, we just re-submit the saved details as a new request.
     setStep('report');
     setReport(null);
     setRiskAnalysis(null);
@@ -173,12 +170,12 @@ const App: React.FC = () => {
     saveToHistory(result, risk);
   }
 
-  // Handle Follow-up Question
+  // Handle Follow-up Question - Now used in Sidebar
   const handleFollowUp = async (question: string) => {
     if (!report) return;
     
     setLoadingText("Updating your plan...");
-    setIsGenerating(true);
+    setIsGenerating(true); // Re-use main loader for now, or could split state
     // Combine the previous report components into a text context
     const previousContext = `
       SUMMARY: ${JSON.stringify(report.summary)}
@@ -406,6 +403,7 @@ const App: React.FC = () => {
                 onDeepCheck={handleSafetyCheck}
                 isThinking={isThinking}
                 safetyVerdict={safetyVerdict}
+                // onFollowUp passed to Sidebar
                 onFollowUp={handleFollowUp}
                 riskAnalysis={riskAnalysis}
                 onGetAlternatives={handleGetAlternatives}
@@ -420,38 +418,19 @@ const App: React.FC = () => {
           )}
         </div>
 
-        {/* History Sidebar (Desktop) / Section (Mobile) */}
-        {history.length > 0 && (
+        {/* Right Sidebar (History, Chat, Tips, Recs) */}
+        {(step === 'report' || history.length > 0) && (
           <div className="w-full md:w-80 flex-shrink-0 mt-8 md:mt-0 animate-fade-in">
-             <div className="bg-white dark:bg-stone-800 rounded-2xl shadow-sm border border-stone-200 dark:border-stone-700 overflow-hidden sticky top-24">
-                <div className="p-4 border-b border-stone-100 dark:border-stone-700 bg-stone-50 dark:bg-stone-900 flex items-center gap-2">
-                   <IconHistory className="w-5 h-5 text-stone-500 dark:text-stone-400" />
-                   <h3 className="font-bold text-stone-700 dark:text-stone-300">Previous Plans</h3>
-                </div>
-                <div className="max-h-[500px] overflow-y-auto">
-                   {history.map((item) => (
-                     <div 
-                       key={item.id} 
-                       onClick={() => loadHistoryItem(item)}
-                       className={`p-4 border-b border-stone-100 dark:border-stone-700 cursor-pointer transition-colors relative group ${
-                         activeHistoryItem?.id === item.id ? 'bg-forest-50 dark:bg-forest-900/20 border-forest-100 dark:border-forest-800' : 'hover:bg-stone-50 dark:hover:bg-stone-700/50'
-                       }`}
-                     >
-                        <div className="flex justify-between items-start">
-                           <h4 className="font-bold text-sm text-stone-800 dark:text-stone-200 line-clamp-1">{item.trailName}</h4>
-                           <button 
-                              onClick={(e) => deleteHistoryItem(item.id, e)}
-                              className="text-stone-300 hover:text-red-500 transition-colors p-1"
-                           >
-                              <IconTrash className="w-4 h-4" />
-                           </button>
-                        </div>
-                        <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">{new Date(item.timestamp).toLocaleDateString()} • {item.riskAnalysis.level}</p>
-                        <p className="text-xs text-stone-400 dark:text-stone-500 mt-2 line-clamp-2">{item.report.summary.verdict}</p>
-                     </div>
-                   ))}
-                </div>
-             </div>
+             <SidebarRight 
+                history={history}
+                activeHistoryItem={activeHistoryItem}
+                onLoadHistoryItem={loadHistoryItem}
+                onDeleteHistoryItem={deleteHistoryItem}
+                hikeDetails={hikeDetails}
+                userProfile={userProfile}
+                onFollowUp={handleFollowUp}
+                isThinking={isGenerating} // Reusing generating state for thinking spinner in chat
+             />
           </div>
         )}
 

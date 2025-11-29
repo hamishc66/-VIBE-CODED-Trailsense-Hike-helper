@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { TripReport, RiskAnalysis, SaferAlternative, HistoryItem, TripData, WarningChip, HikeDetails } from '../types';
+import { TripReport, RiskAnalysis, SaferAlternative, HistoryItem, TripData, WarningChip, HikeDetails, UserProfile } from '../types';
 import { IconLink, IconSearch, IconShield, IconCheck, IconWarning, IconStop, IconSend, IconInfo, IconRefresh, IconHistory, IconTime, IconSettings, IconScale, IconChart, IconCloud, IconWeight, IconStar, IconShare, IconList, IconMap, IconFirstAid, IconBot } from './Icons';
 import { calculateTurnaroundTime, estimatePackWeight, calculateULScore, calculateRiskAnalysis, generateWarnings } from '../utils/riskUtils';
+import { CollapsiblePanel } from './CollapsiblePanel';
 
 interface ReportViewProps {
   report: TripReport | null;
@@ -12,20 +13,15 @@ interface ReportViewProps {
   onDeepCheck: () => void;
   isThinking: boolean;
   safetyVerdict: string | null;
-  onFollowUp: (question: string) => void;
   riskAnalysis: RiskAnalysis | null;
   onGetAlternatives: () => void;
   alternatives: SaferAlternative[] | null;
   isLoadingAlternatives: boolean;
-  historyItem: HistoryItem | null;
-  onReRunHistory: () => void;
   isBeginner: boolean;
-  userProfile: any;
-}
-
-interface ChatMessage {
-    role: 'user' | 'model';
-    text: string;
+  userProfile: UserProfile;
+  onFollowUp?: (question: string) => void;
+  historyItem?: HistoryItem | null;
+  onReRunHistory?: () => void;
 }
 
 const ReportView: React.FC<ReportViewProps> = ({ 
@@ -36,15 +32,15 @@ const ReportView: React.FC<ReportViewProps> = ({
   onDeepCheck, 
   isThinking, 
   safetyVerdict,
-  onFollowUp,
   riskAnalysis,
   onGetAlternatives,
   alternatives,
   isLoadingAlternatives,
-  historyItem,
-  onReRunHistory,
   isBeginner,
-  userProfile
+  userProfile,
+  onFollowUp,
+  historyItem,
+  onReRunHistory
 }) => {
   const [showRiskDetails, setShowRiskDetails] = useState(false);
   const [showWhatIf, setShowWhatIf] = useState(false);
@@ -73,20 +69,10 @@ const ReportView: React.FC<ReportViewProps> = ({
   const [shareText, setShareText] = useState('');
   const [copied, setCopied] = useState(false);
 
-  // Chat State
-  const [chatInput, setChatInput] = useState('');
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([
-      { role: 'model', text: "I've analyzed the trail conditions for you. Let me know if you need to adjust the plan!" }
-  ]);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-  const prevLoadingRef = useRef(isLoading);
-
   useEffect(() => {
     if (report?.data) {
       setWhatIfData(report.data);
       // Reset adjustments on new report load (initial)
-      // We don't reset on updates to preserve context if user was playing with them, 
-      // but for simplicity we reset here to match the new "ground truth".
       setTempAdjust(0);
       setDistAdjust(0);
       setTimeAdjust(0);
@@ -98,26 +84,10 @@ const ReportView: React.FC<ReportViewProps> = ({
     }
   }, [report]);
 
-  // Handle Chat History Updates
-  useEffect(() => {
-      // If we finished loading...
-      if (prevLoadingRef.current && !isLoading && report) {
-          setChatHistory(prev => [...prev, { role: 'model', text: "Plan updated! I've adjusted the details based on your request." }]);
-      }
-      prevLoadingRef.current = isLoading;
-  }, [isLoading, report]);
-
-  // Scroll to bottom of chat
-  useEffect(() => {
-      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatHistory, isLoading]);
-
-
   // Recalculate what-if risk when sliders move
   useEffect(() => {
     if (!report?.data || !whatIfData) return;
     
-    // Create hypothetical data
     const hypoData: TripData = {
       ...whatIfData,
       tempC: report.data.tempC + tempAdjust,
@@ -125,22 +95,18 @@ const ReportView: React.FC<ReportViewProps> = ({
       weatherCondition: weatherOverride || report.data.weatherCondition
     };
 
-    // Parse hypothetical start time
     const baseHour = 9; 
     const newHour = Math.min(23, Math.max(0, baseHour + timeAdjust));
     const hypoStartTime = `${newHour.toString().padStart(2, '0')}:00`;
 
-    // Hypo Weight
     const estimatedBase = estimatePackWeight(hypoData);
     const hypoWeight = Math.max(1, estimatedBase + weightAdjust);
 
-    // Hypo User
     const hypoUser = {
         ...userProfile,
         fitness: (fitnessOverride || userProfile.fitness) as 'low' | 'medium' | 'high'
     };
 
-    // Recalc risk, warnings, scores
     const newRisk = calculateRiskAnalysis(hypoUser, hypoData, hypoStartTime, hypoWeight);
     const newWarnings = generateWarnings(hypoData, hypoStartTime);
     const newScore = calculateULScore(hypoWeight, hypoData);
@@ -150,16 +116,6 @@ const ReportView: React.FC<ReportViewProps> = ({
     setWhatIfULScore(newScore);
 
   }, [tempAdjust, distAdjust, timeAdjust, weatherOverride, weightAdjust, fitnessOverride, report, userProfile, whatIfData]);
-
-
-  const handleSubmitChat = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (chatInput.trim()) {
-      setChatHistory(prev => [...prev, { role: 'user', text: chatInput }]);
-      onFollowUp(chatInput);
-      setChatInput('');
-    }
-  };
 
   const Tooltip = ({ text }: { text: string }) => (
     isBeginner ? (
@@ -188,14 +144,12 @@ const ReportView: React.FC<ReportViewProps> = ({
 
   if (!report) return null;
 
-  // Derived Values
   const effectiveData = report.data; 
   const packWeight = estimatePackWeight(effectiveData);
   const ulScore = calculateULScore(packWeight, effectiveData);
   const turnaround = calculateTurnaroundTime(effectiveData, hikeDetails.startTime, userProfile.fitness); 
   const warnings = generateWarnings(effectiveData, hikeDetails.startTime); 
 
-  // New Timeline Calculation
   const calculateTimeline = () => {
     const startParts = hikeDetails.startTime.split(':').map(Number);
     const startDate = new Date();
@@ -220,7 +174,6 @@ const ReportView: React.FC<ReportViewProps> = ({
 
   const timeline = calculateTimeline();
 
-  // Share Card Generation Logic
   const generateShareCard = (format: 'minimal' | 'full' | 'detailed') => {
     const header = `TrailSense Hike Plan — ${hikeDetails.trailName}`;
     const date = `📅 ${hikeDetails.date}`;
@@ -231,72 +184,11 @@ const ReportView: React.FC<ReportViewProps> = ({
     const highlights = report.summary.highlights.length > 0 ? `✨ Highlights: ${report.summary.highlights.join(', ')}` : '';
 
     if (format === 'minimal') {
-      return `
-${header}
-${date}
-🚶 ${report.summary.stats}
-⚠ Risk: ${report.summary.riskFactor}
-${safety}
-${verdict}
-${footer}`;
+      return `\n${header}\n${date}\n🚶 ${report.summary.stats}\n⚠ Risk: ${report.summary.riskFactor}\n${safety}\n${verdict}\n${footer}`;
     } else if (format === 'full') {
-        return `
-${header}
-${date} • ${hikeDetails.location}
-
-📊 Quick Stats
-• ${report.summary.stats}
-• Start: ${hikeDetails.startTime}
-• Turnaround: ${timeline.turnaround}
-• Sunset: ${effectiveData.sunsetTime || '--:--'}
-
-${safety}
-⚠ Top Risk: ${report.summary.riskFactor}
-${verdict}
-
-${highlights}
-
-🌦 Weather Snapshot
-• ${effectiveData.tempC}°C, ${effectiveData.weatherCondition}
-• Rain/Precip: check forecast
-
-🥾 Packing Essentials
-• Water, Nav, Light, First Aid, Layers
-• Recommended: ${report.ulGear}
-
-${footer}`;
+        return `\n${header}\n${date} • ${hikeDetails.location}\n\n📊 Quick Stats\n• ${report.summary.stats}\n• Start: ${hikeDetails.startTime}\n• Turnaround: ${timeline.turnaround}\n• Sunset: ${effectiveData.sunsetTime || '--:--'}\n\n${safety}\n⚠ Top Risk: ${report.summary.riskFactor}\n${verdict}\n\n${highlights}\n\n🌦 Weather Snapshot\n• ${effectiveData.tempC}°C, ${effectiveData.weatherCondition}\n• Rain/Precip: check forecast\n\n🥾 Packing Essentials\n• Water, Nav, Light, First Aid, Layers\n• Recommended: ${report.ulGear}\n\n${footer}`;
     } else {
-        // Detailed
-        return `
-${header}
-${date} • ${hikeDetails.location}
-
-SAFETY ANALYSIS
-${safety}
-• Main Risk: ${report.summary.riskFactor}
-• Verdict: ${report.summary.verdict}
-• Good to know: ${report.safety.pros.slice(0,2).join(', ')}
-• Watch out for: ${report.safety.cons.slice(0,3).join(', ')}
-
-ROUTE & TIMING
-• ${report.summary.stats}
-• Difficulty: ${report.summary.difficulty}
-• Start: ${hikeDetails.startTime}
-• Turnaround Target: ${timeline.turnaround} (Strict)
-• Est. Finish: ${timeline.end}
-• Sunset: ${effectiveData.sunsetTime}
-• ${highlights}
-
-CONDITIONS
-• Weather: ${effectiveData.tempC}°C, ${effectiveData.weatherCondition}
-• Pack Weight Est: ~${packWeight}kg (UL Score: ${ulScore})
-
-GEAR CHECKLIST
-• 10 Essentials (Nav, Sun, Light, First Aid, Knife, Fire, Shelter, Food, Water, Clothes)
-• Special Item: ${report.ulGear}
-• Why? ${report.gearReason || 'Standard safety precaution.'}
-
-${footer}`;
+        return `\n${header}\n${date} • ${hikeDetails.location}\n\nSAFETY ANALYSIS\n${safety}\n• Main Risk: ${report.summary.riskFactor}\n• Verdict: ${report.summary.verdict}\n• Good to know: ${report.safety.pros.slice(0,2).join(', ')}\n• Watch out for: ${report.safety.cons.slice(0,3).join(', ')}\n\nROUTE & TIMING\n• ${report.summary.stats}\n• Difficulty: ${report.summary.difficulty}\n• Start: ${hikeDetails.startTime}\n• Turnaround Target: ${timeline.turnaround} (Strict)\n• Est. Finish: ${timeline.end}\n• Sunset: ${effectiveData.sunsetTime}\n• ${highlights}\n\nCONDITIONS\n• Weather: ${effectiveData.tempC}°C, ${effectiveData.weatherCondition}\n• Pack Weight Est: ~${packWeight}kg (UL Score: ${ulScore})\n\nGEAR CHECKLIST\n• 10 Essentials (Nav, Sun, Light, First Aid, Knife, Fire, Shelter, Food, Water, Clothes)\n• Special Item: ${report.ulGear}\n• Why? ${report.gearReason || 'Standard safety precaution.'}\n\n${footer}`;
     }
   };
 
@@ -317,124 +209,26 @@ ${footer}`;
     setTimeout(() => setCopied(false), 2000);
   };
 
-
-  // Sidebar Component
-  const UsefulToolsSidebar = () => {
-    const [checklist, setChecklist] = useState([
-        { id: 1, text: 'Navigation (Map/App)', checked: false },
-        { id: 2, text: 'Headlamp + Extra Batteries', checked: false },
-        { id: 3, text: 'Sun Protection', checked: false },
-        { id: 4, text: 'First Aid Kit', checked: false },
-        { id: 5, text: 'Knife / Repair Kit', checked: false },
-        { id: 6, text: 'Fire Starter', checked: false },
-        { id: 7, text: 'Emergency Shelter', checked: false },
-        { id: 8, text: 'Extra Food', checked: false },
-        { id: 9, text: 'Extra Water', checked: false },
-        { id: 10, text: 'Extra Clothes', checked: false },
-    ]);
-
-    const toggleItem = (id: number) => {
-        setChecklist(checklist.map(i => i.id === id ? { ...i, checked: !i.checked } : i));
-    };
-
-    return (
-        <div className="space-y-6">
-            {/* Weather Snapshot */}
-            <div className="bg-white dark:bg-stone-800 p-4 rounded-xl border border-stone-200 dark:border-stone-700 shadow-sm">
-                <h4 className="font-bold text-stone-700 dark:text-stone-300 mb-3 flex items-center gap-2">
-                    <IconCloud className="w-4 h-4 text-forest-500" /> Current Conditions
-                </h4>
-                <div className="flex justify-between items-center">
-                    <div>
-                        <span className="text-3xl font-black text-stone-800 dark:text-stone-100">{effectiveData.tempC}°C</span>
-                        <p className="text-xs text-stone-500 dark:text-stone-400 font-medium">{effectiveData.weatherCondition}</p>
-                    </div>
-                    <div className="text-right">
-                         <span className="text-xs text-stone-400 uppercase font-bold">Sunset</span>
-                         <p className="text-stone-700 dark:text-stone-300 font-mono">{effectiveData.sunsetTime || '--:--'}</p>
-                    </div>
-                </div>
-                <p className="text-[10px] text-stone-400 dark:text-stone-500 mt-2 italic text-right border-t border-stone-100 dark:border-stone-700 pt-2">AI Estimate. Verify with local forecast.</p>
-            </div>
-            
-            {/* Personalized AI Tips */}
-            <div className="bg-gradient-to-br from-forest-600 to-forest-800 p-4 rounded-xl border border-forest-500 shadow-md text-white">
-                 <h4 className="font-bold text-white mb-3 flex items-center gap-2">
-                    <IconBot className="w-4 h-4" /> Your AI Tips
-                 </h4>
-                 <ul className="space-y-2">
-                    {report.summary.tips && report.summary.tips.length > 0 ? (
-                        report.summary.tips.map((tip, i) => (
-                            <li key={i} className="flex items-start gap-2 text-xs font-medium opacity-90">
-                                <span className="mt-1 w-1.5 h-1.5 bg-white/50 rounded-full flex-shrink-0"></span>
-                                {tip}
-                            </li>
-                        ))
-                    ) : (
-                        <li className="text-xs italic opacity-70">Enjoy your hike and pace yourself!</li>
-                    )}
-                 </ul>
-            </div>
-
-            {/* Ten Essentials Checklist */}
-            <div className="bg-white dark:bg-stone-800 p-4 rounded-xl border border-stone-200 dark:border-stone-700 shadow-sm">
-                <h4 className="font-bold text-stone-700 dark:text-stone-300 mb-3 flex items-center gap-2">
-                    <IconFirstAid className="w-4 h-4 text-red-500" /> 10 Essentials
-                </h4>
-                <div className="space-y-2">
-                    {checklist.map(item => (
-                        <label key={item.id} className="flex items-center gap-2 cursor-pointer group">
-                            <input 
-                                type="checkbox" 
-                                checked={item.checked} 
-                                onChange={() => toggleItem(item.id)}
-                                className="w-4 h-4 rounded border-stone-300 text-forest-600 focus:ring-forest-500 cursor-pointer" 
-                            />
-                            <span className={`text-xs transition-colors ${item.checked ? 'text-stone-400 line-through' : 'text-stone-700 dark:text-stone-300 group-hover:text-forest-600'}`}>
-                                {item.text}
-                            </span>
-                        </label>
-                    ))}
-                </div>
-            </div>
-
-            {/* Share Plan Button */}
-            <div className="bg-gradient-to-br from-forest-50 to-white dark:from-stone-800 dark:to-stone-900 p-4 rounded-xl border border-forest-100 dark:border-stone-700 shadow-sm text-center">
-                 <h4 className="font-bold text-stone-800 dark:text-stone-200 mb-2">Hiking with a friend?</h4>
-                 <p className="text-xs text-stone-500 dark:text-stone-400 mb-3">Share your plan and turnaround time.</p>
-                 <button 
-                    onClick={handleOpenShare}
-                    className="w-full py-2 bg-white dark:bg-stone-700 border border-stone-200 dark:border-stone-600 rounded-lg text-sm font-bold text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-600 transition-colors flex items-center justify-center gap-2"
-                 >
-                    <IconShare className="w-4 h-4" />
-                    Share Plan
-                 </button>
-            </div>
-        </div>
-    );
-  };
-
   return (
     <div className="space-y-6 animate-fade-in-up pb-20">
       
       {/* History Banner */}
       {historyItem && (
-        <div className="bg-stone-800 text-stone-100 p-3 rounded-xl flex items-center justify-between shadow-md">
-           <div className="flex items-center gap-2">
-             <IconHistory className="w-5 h-5 text-stone-400" />
-             <div className="text-sm">
-               <span className="font-semibold text-white">Viewing saved plan</span>
-               <span className="text-stone-400 mx-2">•</span>
-               {new Date(historyItem.timestamp).toLocaleString()}
+        <div className="bg-stone-100 dark:bg-stone-700 p-3 rounded-xl border border-stone-200 dark:border-stone-600 flex items-center justify-between animate-fade-in mb-4">
+             <div className="flex items-center gap-2">
+                 <IconHistory className="w-4 h-4 text-stone-500 dark:text-stone-400" />
+                 <span className="text-sm font-semibold text-stone-600 dark:text-stone-300">
+                     Viewing past plan from {new Date(historyItem.timestamp).toLocaleDateString()}
+                 </span>
              </div>
-           </div>
-           <button 
-             onClick={onReRunHistory}
-             className="text-xs bg-stone-700 hover:bg-stone-600 px-3 py-1.5 rounded-lg transition-colors border border-stone-600 font-medium flex items-center gap-1"
-           >
-             <IconRefresh className="w-3 h-3" />
-             Re-run
-           </button>
+             {onReRunHistory && (
+                 <button 
+                   onClick={onReRunHistory}
+                   className="text-xs bg-forest-600 text-white px-3 py-1.5 rounded-lg hover:bg-forest-700 transition-colors flex items-center gap-1 shadow-sm"
+                 >
+                     <IconRefresh className="w-3 h-3" /> Re-check for Today
+                 </button>
+             )}
         </div>
       )}
 
@@ -454,20 +248,11 @@ ${footer}`;
       )}
 
       {/* 1. At a Glance Summary Card */}
-      <div className="bg-white dark:bg-stone-800 rounded-2xl shadow-sm border border-stone-200 dark:border-stone-700">
-        <div className="bg-forest-50 dark:bg-forest-900/30 p-4 border-b border-forest-100 dark:border-forest-800 flex items-center justify-between">
-            <h3 className="font-bold text-forest-900 dark:text-forest-100 flex items-center gap-2">
-                <IconChart className="w-5 h-5 text-forest-600" />
-                Trail Summary
-            </h3>
-            <span className={`text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wide ${
-                report.summary.verdict.toLowerCase().includes('good') ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100' : 
-                report.summary.verdict.toLowerCase().includes('caution') ? 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100' : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100'
-            }`}>
-                {report.summary.verdict}
-            </span>
-        </div>
-        <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <CollapsiblePanel 
+        title="Trail Summary" 
+        icon={<IconChart className="w-5 h-5 text-forest-600" />}
+      >
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div>
                 <span className="text-xs text-stone-500 dark:text-stone-400 uppercase tracking-wider font-semibold block mb-1">
                   Difficulty
@@ -475,7 +260,7 @@ ${footer}`;
                 </span>
                 <span className="text-lg font-bold text-stone-800 dark:text-stone-200">{report.summary.difficulty}</span>
                 
-                {/* REPLACED CHART WITH TIMELINE */}
+                {/* TIMELINE */}
                 <div className="mt-3 relative pl-3 border-l-2 border-stone-200 dark:border-stone-600 space-y-4">
                     <div className="relative">
                         <div className="absolute -left-[17px] top-1 w-2.5 h-2.5 rounded-full bg-green-500 border-2 border-white dark:border-stone-800"></div>
@@ -534,7 +319,7 @@ ${footer}`;
                 )}
             </div>
         </div>
-      </div>
+      </CollapsiblePanel>
 
       {/* Safety Level Bar */}
       {riskAnalysis && (
@@ -580,26 +365,14 @@ ${footer}`;
       )}
 
       {/* "What If" Exploration Mode */}
-      <div className="bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl overflow-hidden shadow-sm">
-        <button 
-           onClick={() => setShowWhatIf(!showWhatIf)} 
-           className="w-full flex items-center justify-between p-4 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
-        >
-          <div className="flex items-center gap-2 text-stone-700 dark:text-stone-300 font-bold text-sm">
-             <IconSettings className="w-4 h-4" />
-             Explore: "What If?" Mode
-          </div>
-          <span className="text-xs text-forest-600 dark:text-forest-400 font-medium">
-             {showWhatIf ? 'Close' : 'Adjust conditions'}
-          </span>
-        </button>
-        
-        {showWhatIf && (
-          <div className="p-4 border-t border-stone-200 dark:border-stone-700 space-y-6 animate-fade-in bg-white dark:bg-stone-800/50">
-             
-             {/* SIMULATED DASHBOARD */}
+      <CollapsiblePanel 
+        title="Explore: What If Mode" 
+        icon={<IconSettings className="w-4 h-4" />}
+        defaultExpanded={false}
+      >
+          {/* SIMULATED DASHBOARD */}
              {whatIfRisk && (
-               <div className="bg-stone-50 dark:bg-stone-900 p-4 rounded-xl border border-stone-200 dark:border-stone-700 flex flex-wrap gap-4 items-center justify-between">
+               <div className="bg-stone-50 dark:bg-stone-900 p-4 rounded-xl border border-stone-200 dark:border-stone-700 flex flex-wrap gap-4 items-center justify-between mb-6">
                   <div>
                     <span className="text-[10px] uppercase font-bold text-stone-400 block mb-1">New Safety Level</span>
                     <span className={`text-sm font-bold px-2 py-1 rounded ${whatIfRisk.color.replace('bg-', 'text-').replace('500', '700').replace('600', '800').replace('400', '800')}`}>
@@ -740,9 +513,7 @@ ${footer}`;
                 </div>
 
              </div>
-          </div>
-        )}
-      </div>
+      </CollapsiblePanel>
 
       {/* 2. Detailed Content (Markdown) */}
       <div className="bg-white dark:bg-stone-800 rounded-2xl shadow-sm border border-stone-200 dark:border-stone-700 p-6 md:p-8">
@@ -760,20 +531,8 @@ ${footer}`;
       </div>
 
       {/* 3. Safety Check Panel */}
-      <div className="bg-amber-50/50 dark:bg-amber-900/10 rounded-2xl border border-amber-100 dark:border-amber-900/30 overflow-hidden">
-        <div className="bg-amber-100/50 dark:bg-amber-900/30 p-4 border-b border-amber-200 dark:border-amber-800/50 flex justify-between items-center">
-             <h3 className="text-lg font-bold text-amber-900 dark:text-amber-100 flex items-center gap-2">
-                <IconShield className="w-5 h-5" />
-                Safety Check
-                <Tooltip text="Key things to keep you safe today. Pay attention to 'Watch Out'." />
-             </h3>
-             {riskAnalysis && (
-                <span className={`text-xs font-bold px-2 py-1 rounded uppercase ${riskAnalysis.color.replace('bg-', 'bg-opacity-20 text-').replace('500', '800').replace('600', '800').replace('400', '800')}`}>
-                  Level: {riskAnalysis.level}
-                </span>
-             )}
-        </div>
-        <div className="p-6 grid md:grid-cols-3 gap-6">
+      <CollapsiblePanel title="Safety Breakdown" icon={<IconShield className="w-5 h-5 text-amber-600" />}>
+        <div className="grid md:grid-cols-3 gap-6">
             {/* Good */}
             <div className="space-y-3">
                 <h4 className="text-xs font-bold text-stone-500 dark:text-stone-400 uppercase tracking-wider flex items-center gap-1">
@@ -822,7 +581,7 @@ ${footer}`;
 
         {/* Alternatives Button - Show if risk is Elevated or High */}
         {riskAnalysis && (riskAnalysis.level === 'Elevated' || riskAnalysis.level === 'High') && !alternatives && (
-            <div className="p-4 bg-white dark:bg-stone-800 border-t border-amber-200 dark:border-amber-800">
+            <div className="mt-6 pt-4 border-t border-amber-100 dark:border-amber-900/30">
                  <button 
                    onClick={onGetAlternatives}
                    disabled={isLoadingAlternatives}
@@ -842,7 +601,7 @@ ${footer}`;
 
         {/* Alternatives Display */}
         {alternatives && (
-            <div className="p-4 bg-white dark:bg-stone-800 border-t border-amber-200 dark:border-amber-800 animate-fade-in">
+            <div className="mt-4 animate-fade-in">
                  <h4 className="text-sm font-bold text-forest-800 dark:text-forest-200 mb-3 flex items-center gap-2">
                      <IconCheck className="w-4 h-4" /> Safer Alternatives Found
                  </h4>
@@ -859,7 +618,7 @@ ${footer}`;
         )}
 
         {/* Deep Check Button Area */}
-        <div className="p-4 bg-amber-100/30 dark:bg-amber-900/20 border-t border-amber-200 dark:border-amber-800/50 flex flex-col md:flex-row items-center justify-between gap-4">
+        <div className="mt-4 flex flex-col md:flex-row items-center justify-between gap-4 pt-4 border-t border-stone-100 dark:border-stone-700">
              <p className="text-xs text-amber-800 dark:text-amber-200 md:max-w-md">
                  Need a deeper analysis of terrain traps and fitness compatibility?
              </p>
@@ -882,163 +641,102 @@ ${footer}`;
                 </button>
              )}
         </div>
-      </div>
+      </CollapsiblePanel>
 
-      {/* NEW SIDEBAR SPLIT LAYOUT */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* Left Column: Gear */}
-        <div className="lg:col-span-2 space-y-6">
-            {/* UL Gear Score Section */}
-            <div className="bg-white dark:bg-stone-800 rounded-2xl shadow-sm border border-stone-200 dark:border-stone-700 p-4">
-                <div className="flex items-center gap-2 mb-4">
-                    <IconScale className="w-5 h-5 text-forest-600" />
-                    <h3 className="font-bold text-stone-800 dark:text-stone-200 text-sm">Packing Weight & UL Score</h3>
-                </div>
-                
-                <div className="space-y-6">
-                    {/* Weight Bar */}
-                    <div>
-                    <div className="flex justify-between text-xs font-semibold mb-1 text-stone-500 dark:text-stone-400">
-                        <span>Estimated Pack Weight</span>
-                        <span>~{packWeight} kg</span>
-                    </div>
-                    <div className="h-4 bg-stone-100 dark:bg-stone-700 rounded-full overflow-hidden relative">
-                        {/* Danger Zone Markers */}
-                        <div className="absolute right-0 top-0 bottom-0 w-[20%] bg-red-100/30"></div>
-                        
-                        <div 
-                            className={`h-full rounded-full transition-all duration-1000 ${
-                            packWeight < 5 ? 'bg-green-500' : packWeight < 8 ? 'bg-amber-400' : 'bg-red-500'
-                            }`}
-                            style={{ width: `${Math.min(100, (packWeight / 12) * 100)}%` }}
-                        ></div>
-                    </div>
-                    <p className="text-[10px] text-stone-400 mt-1 italic">Includes water, food & layers based on distance/weather.</p>
-                    </div>
-
-                    {/* Score & Gear */}
-                    <div>
-                        <div className="flex items-center justify-between mb-2">
-                            <span className="text-xs font-bold text-stone-500 dark:text-stone-400 uppercase">Ultralight Score</span>
-                            <span className={`text-xl font-black ${ulScore > 80 ? 'text-green-600' : ulScore > 50 ? 'text-amber-500' : 'text-red-500'}`}>
-                                {ulScore}
-                            </span>
-                        </div>
-                        <div className="bg-stone-50 dark:bg-stone-900 p-3 rounded-lg border border-stone-100 dark:border-stone-700">
-                            <span className="text-[10px] font-bold text-forest-600 dark:text-forest-400 uppercase block mb-1">Recommended Gear</span>
-                            <p className="text-xs text-stone-700 dark:text-stone-300 font-bold">{report.ulGear}</p>
-                            
-                            {/* Interactive Gear Dropdowns */}
-                            <div className="mt-3 space-y-2">
-                                {/* Why this gear? */}
-                                <div>
-                                    <button 
-                                        onClick={() => setShowGearReason(!showGearReason)}
-                                        className="text-[10px] uppercase font-bold text-stone-500 hover:text-forest-600 flex items-center gap-1 transition-colors"
-                                    >
-                                        {showGearReason ? 'Hide Reasoning' : 'Why this gear?'}
-                                        <span className={`transition-transform ${showGearReason ? 'rotate-180' : ''}`}>▼</span>
-                                    </button>
-                                    {showGearReason && (
-                                        <p className="mt-1 text-xs text-stone-600 dark:text-stone-400 animate-fade-in pl-2 border-l-2 border-forest-200">
-                                            {report.gearReason || "Based on current weather and trail conditions."}
-                                        </p>
-                                    )}
-                                </div>
-
-                                {/* Full Packing List */}
-                                <div>
-                                    <button 
-                                        onClick={() => setShowFullGearList(!showFullGearList)}
-                                        className="text-[10px] uppercase font-bold text-stone-500 hover:text-forest-600 flex items-center gap-1 transition-colors"
-                                    >
-                                        {showFullGearList ? 'Hide Full List' : 'Full Packing List'}
-                                        <span className={`transition-transform ${showFullGearList ? 'rotate-180' : ''}`}>▼</span>
-                                    </button>
-                                    {showFullGearList && report.gearList && report.gearList.length > 0 && (
-                                        <ul className="mt-1 space-y-1 animate-fade-in pl-2 border-l-2 border-forest-200">
-                                            {report.gearList.map((item, idx) => (
-                                                <li key={idx} className="text-xs text-stone-600 dark:text-stone-400 flex items-start gap-1.5">
-                                                    <span className="mt-1 w-1 h-1 bg-stone-400 rounded-full flex-shrink-0"></span>
-                                                    {item}
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    )}
-                                </div>
-                            </div>
-
-                            <p className="text-[10px] text-stone-400 dark:text-stone-500 italic mt-3 leading-tight">
-                                the ai may have hallucintaed, also this is not sponsored
-                            </p>
-                        </div>
-                    </div>
-                </div>
+      {/* GEAR */}
+      <CollapsiblePanel 
+        title="Packing Weight & UL Score"
+        icon={<IconScale className="w-5 h-5 text-forest-600" />}
+      >
+        <div className="space-y-6">
+            {/* Weight Bar */}
+            <div>
+            <div className="flex justify-between text-xs font-semibold mb-1 text-stone-500 dark:text-stone-400">
+                <span>Estimated Pack Weight</span>
+                <span>~{packWeight} kg</span>
             </div>
-        </div>
-
-        {/* Right Column: Chat Assistant & Useful Tools Sidebar */}
-        <div className="lg:col-span-1 space-y-6">
-            
-            {/* NEW CHAT PANEL */}
-            <div className="bg-white dark:bg-stone-800 rounded-2xl shadow-sm border border-stone-200 dark:border-stone-700 flex flex-col h-[300px]">
-                <div className="p-3 border-b border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-900/50 flex items-center gap-2">
-                    <IconBot className="w-4 h-4 text-forest-600" />
-                    <h3 className="text-xs font-bold text-stone-700 dark:text-stone-300 uppercase tracking-wide">Trip Assistant</h3>
-                </div>
+            <div className="h-4 bg-stone-100 dark:bg-stone-700 rounded-full overflow-hidden relative">
+                {/* Danger Zone Markers */}
+                <div className="absolute right-0 top-0 bottom-0 w-[20%] bg-red-100/30"></div>
                 
-                <div className="flex-1 overflow-y-auto p-3 space-y-3 scrollbar-hide relative">
-                    {chatHistory.map((msg, i) => (
-                        <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                            <div className={`max-w-[85%] p-2 rounded-xl text-xs ${
-                                msg.role === 'user' 
-                                ? 'bg-forest-600 text-white rounded-br-none' 
-                                : 'bg-stone-100 dark:bg-stone-700 text-stone-800 dark:text-stone-200 rounded-bl-none'
-                            }`}>
-                                {msg.text}
-                            </div>
-                        </div>
-                    ))}
+                <div 
+                    className={`h-full rounded-full transition-all duration-1000 ${
+                    packWeight < 5 ? 'bg-green-500' : packWeight < 8 ? 'bg-amber-400' : 'bg-red-500'
+                    }`}
+                    style={{ width: `${Math.min(100, (packWeight / 12) * 100)}%` }}
+                ></div>
+            </div>
+            <p className="text-[10px] text-stone-400 mt-1 italic">Includes water, food & layers based on distance/weather.</p>
+            </div>
+
+            {/* Score & Gear */}
+            <div>
+                <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-bold text-stone-500 dark:text-stone-400 uppercase">Ultralight Score</span>
+                    <span className={`text-xl font-black ${ulScore > 80 ? 'text-green-600' : ulScore > 50 ? 'text-amber-500' : 'text-red-500'}`}>
+                        {ulScore}
+                    </span>
+                </div>
+                <div className="bg-stone-50 dark:bg-stone-900 p-3 rounded-lg border border-stone-100 dark:border-stone-700">
+                    <span className="text-[10px] font-bold text-forest-600 dark:text-forest-400 uppercase block mb-1">Recommended Gear</span>
+                    <p className="text-xs text-stone-700 dark:text-stone-300 font-bold">{report.ulGear}</p>
                     
-                    {/* Isolated Loading Indicator inside Chat */}
-                    {isLoading && (
-                        <div className="flex justify-start">
-                            <div className="bg-stone-100 dark:bg-stone-700 p-2 rounded-xl rounded-bl-none flex gap-1 items-center">
-                                <div className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce"></div>
-                                <div className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce delay-75"></div>
-                                <div className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce delay-150"></div>
-                            </div>
+                    {/* NEW: Interactive Gear Dropdowns */}
+                    <div className="mt-3 space-y-2">
+                        {/* Why this gear? */}
+                        <div>
+                            <button 
+                                onClick={() => setShowGearReason(!showGearReason)}
+                                className="text-[10px] uppercase font-bold text-stone-500 hover:text-forest-600 flex items-center gap-1 transition-colors"
+                            >
+                                {showGearReason ? 'Hide Reasoning' : 'Why this gear?'}
+                                <span className={`transition-transform ${showGearReason ? 'rotate-180' : ''}`}>▼</span>
+                            </button>
+                            {showGearReason && (
+                                <p className="mt-1 text-xs text-stone-600 dark:text-stone-400 animate-fade-in pl-2 border-l-2 border-forest-200">
+                                    {report.gearReason || "Based on current weather and trail conditions."}
+                                </p>
+                            )}
                         </div>
-                    )}
-                    <div ref={chatEndRef} />
-                </div>
 
-                <div className="p-2 border-t border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-900">
-                    <div className="flex gap-2">
-                        <input 
-                            type="text" 
-                            placeholder="Ask follow-up..."
-                            className="flex-1 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-600 rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-forest-500 outline-none text-stone-800 dark:text-stone-200"
-                            value={chatInput}
-                            onChange={(e) => setChatInput(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && handleSubmitChat(e)}
-                            disabled={isLoading}
-                        />
-                        <button 
-                            onClick={handleSubmitChat}
-                            disabled={!chatInput.trim() || isLoading}
-                            className="p-2 bg-forest-600 text-white rounded-lg hover:bg-forest-700 disabled:opacity-50 transition-colors"
-                        >
-                            <IconSend className="w-4 h-4" />
-                        </button>
+                        {/* Full Packing List */}
+                        <div>
+                            <button 
+                                onClick={() => setShowFullGearList(!showFullGearList)}
+                                className="text-[10px] uppercase font-bold text-stone-500 hover:text-forest-600 flex items-center gap-1 transition-colors"
+                            >
+                                {showFullGearList ? 'Hide Full List' : 'Full Packing List'}
+                                <span className={`transition-transform ${showFullGearList ? 'rotate-180' : ''}`}>▼</span>
+                            </button>
+                            {showFullGearList && report.gearList && report.gearList.length > 0 && (
+                                <ul className="mt-1 space-y-1 animate-fade-in pl-2 border-l-2 border-forest-200">
+                                    {report.gearList.map((item, idx) => (
+                                        <li key={idx} className="text-xs text-stone-600 dark:text-stone-400 flex items-start gap-1.5">
+                                            <span className="mt-1 w-1 h-1 bg-stone-400 rounded-full flex-shrink-0"></span>
+                                            {item}
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
                     </div>
+
+                    <p className="text-[10px] text-stone-400 dark:text-stone-500 italic mt-3 leading-tight">
+                        the ai may have hallucintaed, also this is not sponsored
+                    </p>
                 </div>
             </div>
-
-            <UsefulToolsSidebar />
         </div>
-      </div>
+      </CollapsiblePanel>
+
+      {/* Share Plan Button (Moved from sidebar to bottom here as well if needed, but it's in sidebar now) */}
+      <button 
+        onClick={handleOpenShare}
+        className="w-full py-3 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl text-sm font-bold text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
+        >
+        <IconShare className="w-4 h-4" />
+        Share Plan
+        </button>
 
       {/* Share Modal */}
       {showShareModal && (
