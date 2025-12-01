@@ -113,3 +113,37 @@ export interface RecommendedTrail {
   difficulty: string;
   reason: string;
 }
+
+export interface EmergencyContactData {
+  fullName: string;
+  phone: string;
+  email: string;
+  age: string;
+  medicalConditions: string;
+  allergies: string;
+  medications: string;
+  bloodType: string;
+  vehicleInfo: string;
+
+  contactName: string;
+  contactRelationship: string;
+  contactPhone: string;
+  contactEmail: string;
+
+  tripName: string;
+  trailhead: string;
+  region: string;
+  route: string;
+  startDateTime: string;
+  returnDateTime: string;
+  groupMembers: string;
+  campsites: string;
+
+  plbInfo: string;
+  navMethod: string;
+  gearChecklist: string[];
+
+  weather: string;
+  terrain: string;
+  hazards: string;
+}

@@ -4,9 +4,10 @@ import { ChatAssistant } from './components/ChatAssistant';
 import ReportView from './components/ReportView';
 import DisclaimerModal from './components/DisclaimerModal';
 import { SidebarRight } from './components/SidebarRight';
+import { EmergencySheet } from './components/EmergencySheet';
 import { UserProfile, HikeDetails, ExperienceLevel, TripReport, RiskAnalysis, SaferAlternative, HistoryItem } from './types';
 import { generateTripReport, getQuickTip, performDeepSafetyCheck, generateSaferAlternatives } from './services/gemini';
-import { IconMountain, IconSparkles, IconInfo } from './components/Icons';
+import { IconMountain, IconSparkles, IconInfo, IconFileText } from './components/Icons';
 import { calculateRiskAnalysis } from './utils/riskUtils';
 
 const App: React.FC = () => {
@@ -24,7 +25,11 @@ const App: React.FC = () => {
   };
 
   // State
-  const [step, setStep] = useState<'form' | 'report'>('form');
+  // 'form' = Main Planner Form
+  // 'report' = Trip Report Result
+  // 'emergency' = Emergency Sheet Module
+  const [step, setStep] = useState<'form' | 'report' | 'emergency'>('form');
+  
   const [isGenerating, setIsGenerating] = useState(false);
   const [loadingText, setLoadingText] = useState("Planning your hike...");
   const [quickTip, setQuickTip] = useState<string | null>(null);
@@ -228,15 +233,33 @@ const App: React.FC = () => {
       {/* Liability Warning Modal */}
       {!hasAgreed && <DisclaimerModal onAgree={handleAgree} />}
 
-      <div className="flex flex-col md:flex-row gap-6">
+      <div className="flex flex-col md:flex-row gap-6 relative">
         
         {/* Main Content Area */}
         <div className="flex-1">
+          {/* Main Planner Step */}
           {step === 'form' ? (
             <div className="max-w-2xl mx-auto animate-fade-in-up">
-              <div className="mb-8 text-center">
+              
+              {/* Header with Tab Switcher */}
+              <div className="mb-8 flex flex-col items-center">
+                 <div className="flex p-1 bg-stone-200 dark:bg-stone-800 rounded-xl mb-6">
+                    <button 
+                       onClick={() => setStep('form')}
+                       className="px-6 py-2 rounded-lg font-bold text-sm bg-white dark:bg-stone-600 shadow-sm text-forest-800 dark:text-white transition-all"
+                    >
+                      Trip Planner
+                    </button>
+                    <button 
+                       onClick={() => setStep('emergency')}
+                       className="px-6 py-2 rounded-lg font-bold text-sm text-stone-500 hover:text-stone-800 dark:text-stone-400 dark:hover:text-stone-200 transition-all flex items-center gap-2"
+                    >
+                      <IconFileText className="w-4 h-4" /> Emergency Sheet
+                    </button>
+                 </div>
+              
                 <h2 className="text-3xl font-bold text-forest-900 dark:text-forest-200 mb-2">Plan Your Next Adventure</h2>
-                <p className="text-stone-600 dark:text-stone-400">Tell us where you're going, and TrailSense will check the conditions.</p>
+                <p className="text-stone-600 dark:text-stone-400 text-center max-w-md">Tell us where you're going, and TrailSense will check the conditions.</p>
               </div>
 
               <form onSubmit={handleSubmit} className="bg-white dark:bg-stone-800 p-6 md:p-8 rounded-2xl shadow-sm border border-stone-200 dark:border-stone-700 space-y-6">
@@ -379,7 +402,20 @@ const App: React.FC = () => {
                 </button>
               </form>
             </div>
+          ) : step === 'emergency' ? (
+             <div className="max-w-4xl mx-auto">
+                 <div className="flex items-center justify-between mb-4">
+                    <button 
+                        onClick={() => setStep('form')}
+                        className="text-sm text-stone-500 dark:text-stone-400 hover:text-forest-600 dark:hover:text-forest-400 flex items-center transition-colors"
+                    >
+                        ← Back to Planner
+                    </button>
+                  </div>
+                  <EmergencySheet />
+             </div>
           ) : (
+            // Report View
             <div className="max-w-4xl mx-auto">
               <div className="flex items-center justify-between mb-4">
                 <button 
@@ -419,7 +455,8 @@ const App: React.FC = () => {
         </div>
 
         {/* Right Sidebar (History, Chat, Tips, Recs) */}
-        {(step === 'report' || history.length > 0) && (
+        {/* Only show sidebar if in Report view or if there is history in form view */}
+        {(step === 'report' || (step === 'form' && history.length > 0)) && (
           <div className="w-full md:w-80 flex-shrink-0 mt-8 md:mt-0 animate-fade-in">
              <SidebarRight 
                 history={history}
@@ -430,6 +467,7 @@ const App: React.FC = () => {
                 userProfile={userProfile}
                 onFollowUp={handleFollowUp}
                 isThinking={isGenerating} // Reusing generating state for thinking spinner in chat
+                onOpenEmergencySheet={() => setStep('emergency')}
              />
           </div>
         )}

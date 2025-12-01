@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { HistoryItem, HikeDetails, UserProfile, RecommendedTrail, ChatMessage } from '../types';
-import { IconHistory, IconTrash, IconBot, IconSend, IconSparkles, IconMap } from './Icons';
+import { IconHistory, IconTrash, IconBot, IconSend, IconSparkles, IconMap, IconFileText, IconChevronRight } from './Icons';
 import { getTrailTips, getRecommendedTrails, generateTripReport } from '../services/gemini';
 import { CollapsiblePanel } from './CollapsiblePanel';
 
@@ -14,6 +14,7 @@ interface SidebarRightProps {
   // Chat props
   onFollowUp: (question: string) => void;
   isThinking: boolean;
+  onOpenEmergencySheet: () => void;
 }
 
 export const SidebarRight: React.FC<SidebarRightProps> = ({
@@ -24,7 +25,8 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
   hikeDetails,
   userProfile,
   onFollowUp,
-  isThinking
+  isThinking,
+  onOpenEmergencySheet
 }) => {
   // Chat State
   const [chatInput, setChatInput] = useState('');
@@ -88,6 +90,21 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
 
   return (
     <div className="w-full space-y-6">
+
+      {/* 0. Emergency Sheet CTA */}
+      <button 
+        onClick={onOpenEmergencySheet}
+        className="w-full bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 p-3 rounded-xl flex items-center gap-3 hover:bg-stone-50 dark:hover:bg-stone-700 transition-colors shadow-sm group text-left"
+      >
+        <div className="bg-red-100 dark:bg-red-900/30 p-2 rounded-lg text-red-600 dark:text-red-400 group-hover:scale-110 transition-transform">
+            <IconFileText className="w-5 h-5" />
+        </div>
+        <div className="flex-1">
+            <div className="font-bold text-sm text-stone-800 dark:text-stone-200">Emergency Contact Sheet</div>
+            <div className="text-[10px] text-stone-500 dark:text-stone-400">Generate a printable PDF plan</div>
+        </div>
+        <IconChevronRight className="w-4 h-4 text-stone-400" />
+      </button>
       
       {/* 1. Previous Plans */}
       {history.length > 0 && (

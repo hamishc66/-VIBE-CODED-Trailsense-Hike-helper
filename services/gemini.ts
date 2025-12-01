@@ -1,5 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
-import { UserProfile, HikeDetails, GroundingSource, TripReport, TripReportSummary, SafetyAnalysis, TripData, SaferAlternative, RiskAnalysis, RecommendedTrail } from "../types";
+import { UserProfile, HikeDetails, GroundingSource, TripReport, TripReportSummary, SafetyAnalysis, TripData, SaferAlternative, RiskAnalysis, RecommendedTrail, EmergencyContactData } from "../types";
 
 // Initialize the client
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -447,4 +447,37 @@ export const getRecommendedTrails = async (hike: HikeDetails): Promise<Recommend
     console.error("Recs error", e);
     return [];
   }
+};
+
+/**
+ * GENERATE EMERGENCY SHEET
+ */
+export const generateEmergencySheet = async (data: EmergencyContactData): Promise<string> => {
+    const prompt = `
+      Format the following hiking emergency contact data into a professional, clean, structured Emergency Sheet using Markdown.
+      The output should be designed to be printed or saved as a PDF.
+      
+      Structure:
+      1. Header: "TrailSense Emergency Contact Sheet" with today's date.
+      2. Table-like layouts for Personal Info, Emergency Contact, and Trip Details.
+      3. Gear & Conditions checklist.
+      4. A bold Liability Disclaimer at the bottom.
+      
+      DATA:
+      ${JSON.stringify(data, null, 2)}
+      
+      Make it look very clean and readable. Use tables or clear headers.
+      Do not add conversational text. Just the document content.
+    `;
+    
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+        });
+        return response.text || "Could not generate sheet.";
+    } catch (e) {
+        console.error("Emergency sheet error", e);
+        return "Error generating sheet.";
+    }
 };
